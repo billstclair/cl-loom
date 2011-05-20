@@ -1,0 +1,18 @@
+This directory contains a sample of the default configuration of the
+loom-perl/conf directory. The files "sloop" and "loom" are created by
+loom::attempt-loom-server-startup, but they are never overwritten, so
+you can configure them by hand by doing:
+
+  cd .../loom
+  mkdir -p loom-perl/data/conf
+  cp conf-sample/sloop loom-perl/data/conf/
+  cp conf-sample/loom loom-perl/data/conf/
+
+Then edit loom-perl/data/conf/sloop, which configures the Loom web
+server. For development on a machine with more than one developer,
+you'll want to assign a different "host_port" value to each developer,
+different from the default of 8286.
+
+loom-perl/data/conf/loom configures the loom server's web site. I
+don't know much about it except that Patrick Chkoreff told me to set
+it up how I did.

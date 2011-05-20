@@ -1,0 +1,8 @@
+(
+:module
+=Loom::Web::Main
+:host_port
+=8286
+:use_error_log
+=1
+)
