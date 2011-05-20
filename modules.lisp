@@ -14,12 +14,12 @@
 (asdf:oos 'asdf:load-op 'drakma)
 (asdf:oos 'asdf:load-op 'split-sequence)
 
-(with-system-name (:loom)
+(with-system-name (:cl-loom)
 
-  (define-root-directory :loom  *load-truename*)
+  (define-root-directory :cl-loom  *load-truename*)
   
-  (define-module :loom
-    (:directory :loom)
+  (define-module :cl-loom
+    (:directory :cl-loom)
     (:files "package"
             "c-escape"
             "loom-client"
