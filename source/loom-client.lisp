@@ -245,7 +245,45 @@ Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."
           (with-loom-transaction ()
             (sha256 "foo"))
           nil)))))
-                       
+
+
+;; URL path for Loom API HTTP GET request is currently not URL-encoded in its
+;; entirety.  Strings should be URL-encoded to protect multi-byte characters and
+;; even 8-bit characters.  Absent URL-encoding, only US-ASCII, and some 7-bit
+;; European sets, are reliably handled by Web servers. However, it is not clear
+;; that Loom expects URL-encoding on all components of the URL path.
+
+;; Solution for the Loom API is to URL-encode strings that are treated as
+;; archive content, such as asset descriptions, where there is a real need for
+;; multi-byte UTF-8 encoding.
+
+;; Note also, HTTP request method (below) uses UTF-8 for input and output HTTP
+;; streams. Oddly - and this may be a bug in the code here or in Drakma - the
+;; URL-encoded strings are emitted in HTTP output with the hex coding intact, so
+;; the Loom client must URL-decode them - to be investigated.
+
+;; URL-encoding is done for archive content strings (asset descriptions).
+;; *URL-ENCODE-LOOM-CLIENT-STRINGS* is a Boolean that enables or disables
+;; URL-encoding. Default: ON.
+
+(defvar *url-encode-loom-client-strings* t)
+
+;; *LOOM-CLIENT-DEFAULT-EXTERNAL-FORMAT* is a keyword symbol naming ane external
+;; format.  Default is UTF-8. Using LATIN-1 is known to fail, and no other
+;; formats have been tested.
+
+(defvar *loom-client-default-external-format* ':utf-8)
+
+(defun url-encode-loom-client-string (str &optional (external-format *loom-client-default-external-format*))
+  (if *url-encode-loom-client-strings*
+      (hunchentoot:url-encode str external-format)
+      str))
+
+(defun url-decode-loom-client-string (str &optional (external-format *loom-client-default-external-format*))
+  (if *url-encode-loom-client-strings*
+      (hunchentoot:url-decode str external-format)
+      str))
+
 (defun request (path &rest args)
   (with-server-bound ()
     (let* ((stringified-args (mapcar #'downcase-princ-to-string args))
@@ -260,8 +298,14 @@ Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."
                      (drakma:http-request uri
                                           :method :get
                                           :parameters (alexandria:plist-alist stringified-args)
-                                          ;; Use *drakma-default-external-format*
-                                          ;;:external-format-out :latin-1
+                                          ;; Use UTF-8 encoding for HTTP stream input and output,
+                                          ;;   extended character sets fail with :external-format-out :latin-1 
+                                          ;; Then changed to use default: *drakma-default-external-format* (:utf-8)
+                                          ;; Now specify :utf-8 explicitly for input and output 
+                                          ;; Also some callers URL-encode selected parameters in path,
+                                          ;;  see *loom-client-default-external-format* 
+                                          :external-format-out ':utf-8
+                                          :external-format-in ':utf-8
                                           :keep-alive keep-alive-p
                                           :close (not keep-alive-p)
                                           :stream (and (not (eq stream t)) stream))
@@ -467,6 +511,7 @@ Error if the location is vacant, unless IGNORE-IF-VACANT-P is true."
         (maybe-signal-loom-error res)))
     res))
 
+
 (defun archive-touch (location)
   "Query the archive value of at LOCATION.
 Returns three values:
@@ -475,7 +520,7 @@ Returns three values:
   2) An alist of the full Loom return"
   (check-type location loom-loc)
   (let ((res (archive-request :touch :loc location)))
-    (values (kv-lookup "content" res)
+    (values (aif (kv-lookup "content" res) (url-decode-loom-client-string it))
             (kv-lookup "content_hash" res)
             res)))
 
@@ -495,23 +540,25 @@ Returns three values:
   2) An alist of the full Loom return"
   (check-type hash loom-hash)
   (let ((res (archive-request :look :hash hash)))
-    (values (kv-lookup "content" res)
+    (values (aif (kv-lookup "content" res) (url-decode-loom-client-string it))
             (kv-lookup "content_hash" res)
             res)))
 
 (defun archive-write (location content usage &optional guard)
   "Write CONTENT into the archive at LOCATION. Debit or credit tokens from USAGE.
-If GUARD is included, it sould be the hash of the former value, as returned as the
+If GUARD is included, it should be the hash of the former value, as returned as the
 second value from ARCHIVE-TOUCH or ARCHIVE-LOOK."
   (check-type location loom-loc)
   (check-type content string)
   (check-type usage loom-loc)
   (check-type guard (or null loom-hash))
-  (let ((res (if guard
-                 (archive-request
-                  :write :loc location :content content :usage usage :guard guard)
-                 (archive-request
-                  :write :loc location :content content :usage usage))))
+  ;; 
+  (let* ((ucontent (url-encode-loom-client-string content))
+         (res (if guard
+                  (archive-request
+                   :write :loc location :content ucontent :usage usage :guard guard)
+                  (archive-request
+                   :write :loc location :content ucontent :usage usage))))
     (values (kv-lookup "content_hash" res)
             res)))
 
