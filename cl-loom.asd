@@ -7,7 +7,7 @@
 ;;; For now, just a client of Patrick Chkoreff's perl code.
 ;;;
 
-(asdf:defsystem :loom
+(asdf:defsystem :cl-loom
   :description "Client for Patrick Chkoreff's Loom.cc digital asset trading system."
   :author "Bill St. Clair <billstclair@rayservers.net>"
   :version "0.5"
