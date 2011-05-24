@@ -12,6 +12,7 @@
            #:loom-server
            #:base-uri-of
            #:setup-of
+           #:make-loom-server
 
            #:loom-server-setup
            #:make-loom-server-setup
@@ -41,6 +42,7 @@
            #:grid-issuer
            #:grid-touch
            #:grid-vacant-p
+           #:random-vacant-grid-loc
            #:grid-look
            #:grid-move
            #:grid-scan
@@ -52,6 +54,7 @@
            #:archive-sell
            #:archive-touch
            #:archive-vacant-p
+           #:random-vacant-archive-loc
            #:archive-look
            #:archive-write
 

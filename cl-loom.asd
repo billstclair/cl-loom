@@ -12,7 +12,7 @@
   :author "Bill St. Clair <billstclair@rayservers.net>"
   :version "0.5"
   :license "Apache"
-  :depends-on (anaphora alexandria drakma split-sequence)
+  :depends-on (anaphora alexandria drakma split-sequence flexi-streams)
   :components
   ((:module source
     :serial t

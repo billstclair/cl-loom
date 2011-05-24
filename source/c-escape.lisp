@@ -42,7 +42,7 @@
            (when (eq char :eof) (return))
            (cond ((not (eql char #\\)) (write-char char os))
                  (t (setf char (read-char s))
-                    (cond ((<= #.(char-code #\0) (char-code char) #.(char-code #\1))
+                    (cond ((<= #.(char-code #\0) (char-code char) #.(char-code #\9))
                            (let ((code (parse-integer (format nil "~a~a~a"
                                                               char
                                                               (read-char s)

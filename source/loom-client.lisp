@@ -61,6 +61,22 @@ Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."
     (setf (setup-of server) setup
           (base-uri-of server) (setup-uri setup))))
 
+(defmethod print-object ((server loom-server) stream)
+  (print-unreadable-object (server stream :type t)
+    (format stream "~s" (base-uri-of server))))
+
+;; With no args, returns the loom.cc server
+;; With a port of T, returns the default local server
+;; With a port of another number, returns a local server to that port
+(defun make-loom-server (&key setup port)
+  (cond (setup (make-instance 'loom-server :setup setup))
+        ((null port) (make-instance 'loom-server))
+        ((eq port t) (make-instance 'loom-server :default-setup-p t))
+        ((integerp port)
+         (make-instance 'loom-server
+                        :setup (make-loom-server-setup :port port)))
+        (t (error "Invalid port: ~s" port))))
+
 ;; KV format examples: https://secure.loom.cc/?function=archive_tutorial&help=1
 ;; (
 ;; :name
@@ -275,13 +291,18 @@ Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."
 (defvar *loom-client-default-external-format* ':utf-8)
 
 (defun url-encode-loom-client-string (str &optional (external-format *loom-client-default-external-format*))
-  (if *url-encode-loom-client-strings*
-      (hunchentoot:url-encode str external-format)
+  (if (and *url-encode-loom-client-strings*
+           (find-if (lambda (char) (>= (char-code char) 256)) str))
+      (map 'string #'code-char
+           (flexi-streams:string-to-octets
+            str :external-format external-format))
       str))
 
 (defun url-decode-loom-client-string (str &optional (external-format *loom-client-default-external-format*))
   (if *url-encode-loom-client-strings*
-      (hunchentoot:url-decode str external-format)
+      (flexi-streams:octets-to-string
+       (map 'vector #'char-code str)
+       :external-format external-format)
       str))
 
 (defun request (path &rest args)
@@ -298,14 +319,8 @@ Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."
                      (drakma:http-request uri
                                           :method :get
                                           :parameters (alexandria:plist-alist stringified-args)
-                                          ;; Use UTF-8 encoding for HTTP stream input and output,
-                                          ;;   extended character sets fail with :external-format-out :latin-1 
-                                          ;; Then changed to use default: *drakma-default-external-format* (:utf-8)
-                                          ;; Now specify :utf-8 explicitly for input and output 
-                                          ;; Also some callers URL-encode selected parameters in path,
-                                          ;;  see *loom-client-default-external-format* 
-                                          :external-format-out ':utf-8
-                                          :external-format-in ':utf-8
+                                          :external-format-out ':latin-1
+                                          :external-format-in ':latin-1
                                           :keep-alive keep-alive-p
                                           :close (not keep-alive-p)
                                           :stream (and (not (eq stream t)) stream))
@@ -422,7 +437,12 @@ Returns two values:
   (let* ((*skip-response-error-check* t)
          (res (grid-request :touch :type asset-type :loc location)))
     (and (equal "fail" (kv-lookup "status" res))
-         (equal "vacant" (kv-lookup "error_loc" res)))))    
+         (equal "vacant" (kv-lookup "error_loc" res)))))
+
+(defun random-vacant-grid-loc (asset-type)
+  (loop for loc = (random-loc)
+     when (grid-vacant-p asset-type loc)
+     return loc))
 
 (defun grid-look (asset-type hash &optional raw-negatives-p)
   "Query the value of ASSET-TYPE at HASH.
@@ -530,7 +550,12 @@ Returns three values:
   (let* ((*skip-response-error-check* t)
          (res (archive-request :touch :loc location)))
     (and (equal "fail" (kv-lookup "status" res))
-         (equal "vacant" (kv-lookup "error_loc" res)))))    
+         (equal "vacant" (kv-lookup "error_loc" res)))))
+
+(defun random-vacant-archive-loc ()
+  (loop for loc = (random-loc)
+     when (archive-vacant-p loc)
+     return loc))
 
 (defun archive-look (hash)
   "Query the archive value of at HASH.
