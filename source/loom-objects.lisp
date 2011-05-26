@@ -342,7 +342,8 @@ on LOOM-STORE's server."
     (write-char #\) stream)
     object))
 
-(defun loom-persist-standard-object (loom-store object)
+(defun loom-persist-standard-object (object &optional
+                                     (loom-store *loom-store*))
   "Write OBJECT to LOOM-STORE.
 Updates an existing object's slots in the store.
 You must call this to persist all slot value changes.
