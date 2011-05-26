@@ -14,6 +14,7 @@
 (asdf:oos 'asdf:load-op 'drakma)
 (asdf:oos 'asdf:load-op 'split-sequence)
 (asdf:oos 'asdf:load-op 'flexi-streams)
+(asdf:oos 'asdf:load-op 'closer-mop)
 
 (with-system-name (:cl-loom)
 
@@ -24,4 +25,5 @@
     (:files "package"
             "c-escape"
             "loom-client"
+            "loom-objects"
 	    )))

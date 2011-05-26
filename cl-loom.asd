@@ -12,7 +12,8 @@
   :author "Bill St. Clair <billstclair@rayservers.net>"
   :version "0.5"
   :license "Apache"
-  :depends-on (anaphora alexandria drakma split-sequence flexi-streams)
+  :depends-on (anaphora alexandria drakma split-sequence flexi-streams
+                        closer-mop)
   :components
   ((:module source
     :serial t
@@ -20,4 +21,5 @@
     ((:file "package")
      (:file "c-escape")
      (:file "loom-client")
+     (:file "loom-objects")
      ))))

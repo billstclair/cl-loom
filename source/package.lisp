@@ -107,4 +107,14 @@
            #:remove-asset
 
            #:format-loom-qty
-           #:unformat-loom-qty))
+           #:unformat-loom-qty
+
+           ;; loom-objects.lisp
+           #:make-loom-store
+           #:with-loom-store
+           #:loom-persist-standard-object
+           #:loom-instance-omitted-slots
+           #:map-loom-instances-of-class
+           #:do-loom-instances-of-class
+           #:loom-instances-of-class
+           ))
