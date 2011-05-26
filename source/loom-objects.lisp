@@ -50,7 +50,7 @@
    (package :initarg :package
             :initform *package*
             :accessor package-of
-            :type (or null package))
+            :type package)
    (loc-to-instance-hash
     :initform (make-hash-table :test 'equal)
     :accessor loc-to-instance-hash-of
@@ -75,16 +75,29 @@
             (root-loc-of store))))
 
 (defun make-loom-store (&key (server *loom-server*)
-                        usage-loc
                         root-loc
-                        (package *package*))
+                        usage-loc
+                        package)
+  "Make a database to store lisp objects in a loom archive.
+SERVER is a LOOM-SERVER, default: *LOOM-SERVER*.
+ROOT-LOC, if specified, is a previous MAKE-LOOM-STORE result.
+  Will open that database for access.
+  If ROOT-LOC is NIL, the default, will create a new database.
+USAGE-LOC is a location from which to take usage tokens for the write.
+  Must be specified and contain usage tokens if ROOT-LOC is NIL.
+  Defaults to the USAGE-LOC used to create the database otherwise.
+PACKAGE is the package to use for printing strings for serialization
+  to the database. Defaults to *PACKAGE*. Ignored if ROOT-LOC is specified.
+Returns a LOOM-STORE instance."
   (check-type server loom-server)
   (check-type usage-loc (or loom-loc null))
   (check-type root-loc (or loom-loc null))  ;null to initialize a new store
-  (unless (or (null package) (typep package 'package))
-    (setf package
-          (or (find-package package)
-              (error "There is no package named: ~s" package))))
+  (if (null package)
+      (setf package *package*)
+      (unless (typep package 'package)
+        (setf package
+              (or (find-package package)
+                  (error "There is no package named: ~s" package)))))
   (make-instance 'loom-store
                  :server server
                  :usage-loc usage-loc
@@ -93,8 +106,10 @@
 
 (defvar *loom-store* nil)
 
-(defmacro with-loom-store ((store) &body body)
-  `(let ((*loom-store* ,store))
+(defmacro with-loom-store ((loom-store) &body body)
+  "Binds *LOOM-STORE* to LOOM-STORE and executes BODY with a transaction
+on LOOM-STORE's server."
+  `(let ((*loom-store* ,loom-store))
      (with-loom-transaction (:server (server-of *loom-store*))
        ,@body)))
 
@@ -139,7 +154,8 @@
 (defun (setf loom-store-get) (value loc &optional usage-loc)
   (with-standard-io-syntax
     (let ((*package* (package-of *loom-store*))
-          (*print-circle* t))
+          (*print-circle* t)
+          (*print-readably* t))
       (archive-write loc
                      (with-output-to-string (s)
                        (write-to-loom-store value s))
@@ -326,11 +342,15 @@
     (write-char #\) stream)
     object))
 
-(defun loom-persist-standard-object (store object)
-  (check-type store loom-store)
+(defun loom-persist-standard-object (loom-store object)
+  "Write OBJECT to LOOM-STORE.
+Updates an existing object's slots in the store.
+You must call this to persist all slot value changes.
+Returns OBJECT."
+  (check-type loom-store loom-store)
   (check-type object standard-object)
-  (with-loom-store (store)
-    (%loom-persist-standard-object store object nil)))
+  (with-loom-store (loom-store)
+    (%loom-persist-standard-object loom-store object nil)))
 
 (defun %loom-persist-standard-object (store object not-present-p)
   (let* ((class-name (class-name (class-of object)))
@@ -400,36 +420,70 @@
        collect slot-name)))
 
 ;; Specialize this to omit slots form your classes
-(defmethod loom-instance-omitted-slots ((instance t))
-  nil)
+(defgeneric loom-instance-omitted-slots (instance)
+  (:method ((instance t))
+    nil)
+  (:documentation "Returns a list of the names of slots of instance
+to omit from the persistent store.
+Specializations should usually cons onto the result of (CALL-NEXT-METHOD)."))
 
 (defun map-loom-instances-of-class (function class-or-name &optional
-                                    (store *loom-store*))
-  (check-type store loom-store)
+                                    (loom-store *loom-store*))
+  "Call function repeatedly, with a single argument, each instance
+of CLASS-OR-NAME that is in LOOM-STORE."
+  (check-type loom-store loom-store)
   (check-type class-or-name (or symbol class))
   (let* ((class-name (if (symbolp class-or-name)
                          class-or-name
                          (class-name class-or-name)))
-         (loom-class (gethash class-name (class-hash-of store)))
-         (loc-to-instance-hash (loc-to-instance-hash-of store)))
+         (loom-class (gethash class-name (class-hash-of loom-store)))
+         (loc-to-instance-hash (loc-to-instance-hash-of loom-store)))
     (when loom-class
-      (with-loom-store (store)
+      (with-loom-store (loom-store)
         (do-linked-nodes (loc (instances-loc-of loom-class) class-name)
           (let ((instance (or (gethash loc loc-to-instance-hash)
                               (loom-store-get loc))))
             (funcall function instance)))))))
 
 (defmacro do-loom-instances-of-class ((instance-var class-or-name &optional
-                                                    store)
+                                                    loom-store)
                                       &body body)
+  "Executes BODY repeatedly, with INSTANCE-VAR bound to each instance
+of CLASS-OR-NAME in LOOM-STORE."
   (let ((thunk (gensym "THUNK")))
     `(flet ((,thunk (,instance-var) ,@body))
        (declare (dynamic-extent #',thunk))
        (map-loom-instances-of-class #',thunk ,class-or-name
-                                    ,@(and store (list store))))))
+                                    ,@(and loom-store (list loom-store))))))
 
-(defun loom-instances-of-class (class-or-name &optional (store *loom-store*))
+(defun loom-instances-of-class (class-or-name &optional
+                                (loom-store *loom-store*))
+  "Returns a list of all instances of CLASS-OR-NAME in LOOM-STORE."
   (let ((res nil))
-    (do-loom-instances-of-class (instance class-or-name store)
+    (do-loom-instances-of-class (instance class-or-name loom-store)
       (push instance res))
     (nreverse res)))
+
+(defun wallet-loom-store (location name &key is-passphrase-p usage package)
+  "Read or create a loom-store with location of NAME in the wallet
+at LOCATION. If IS-PASSPHRASE-P is true, LOCATION is a passphrase.
+USAGE is the source of usage tokens for the store. Use the wallet,
+if NIL. PACKAGE is the package to use for printing strings in the store.
+Use *PACKAGE* if NIL.
+Returns a LOOM-STORE instance."
+  (with-loom-transaction ()
+    (let* ((location (passphrase-location location is-passphrase-p))
+           (wallet (get-wallet location))
+           (name-location (find-location name wallet))
+           (root-loc (and name-location (location-loc name-location))))
+      (cond (root-loc (make-loom-store :root-loc root-loc
+                                       :usage-loc usage
+                                       :package package))
+            (t (let ((store (make-loom-store :usage-loc (or usage location)
+                                             :package package)))
+                 (push (make-location :name name
+                                      :loc (root-loc-of store))
+                       (wallet-locations wallet))
+                 (setf (get-wallet location nil (or usage location))
+                       wallet)
+                 store))))))

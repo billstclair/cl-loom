@@ -110,6 +110,7 @@
            #:unformat-loom-qty
 
            ;; loom-objects.lisp
+           #:wallet-loom-store
            #:make-loom-store
            #:with-loom-store
            #:loom-persist-standard-object
