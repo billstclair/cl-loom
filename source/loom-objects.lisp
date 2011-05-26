@@ -136,9 +136,15 @@ on LOOM-STORE's server."
        (declare (dynamic-extent #',thunk))
        (call-with-loom-store-reader #',thunk))))
 
+(defparameter *loom-package* (find-package :loom))
+
+;; Override (package-of loom-store) during initialization
+(defvar *loom-reader-package* nil)
+
 (defun call-with-loom-store-reader (thunk)
   (with-standard-io-syntax
-    (let ((*package* (package-of *loom-store*))
+    (let ((*package* (or *loom-reader-package*
+                         (package-of *loom-store*)))
           (*read-eval* nil)
           (*readtable* *loom-store-readtable*))
       (funcall thunk))))
@@ -153,7 +159,7 @@ on LOOM-STORE's server."
 
 (defun (setf loom-store-get) (value loc &optional usage-loc)
   (with-standard-io-syntax
-    (let ((*package* (package-of *loom-store*))
+    (let ((*package* (or *loom-reader-package* (package-of *loom-store*)))
           (*print-circle* t)
           (*print-readably* t))
       (archive-write loc
@@ -176,9 +182,10 @@ on LOOM-STORE's server."
                             :package (package-name package)
                             :usage-loc usage-loc))
           (classes `((loom-class nil . nil))))
-      (setf (loom-store-get classes-loc) classes
-            (loom-store-get root-loc) root-plist
-            (root-loc-of store) root-loc
+      (setf (loom-store-get classes-loc) classes)
+      (let ((*loom-reader-package* *loom-package*))
+        (setf (loom-store-get root-loc) root-plist))
+      (setf (root-loc-of store) root-loc
             (classes-loc-of store) classes-loc
             (gethash 'loom-class (class-hash-of store))
             (make-loom-class 'loom-class *loom-class-slots* classes-loc))))
@@ -230,11 +237,14 @@ on LOOM-STORE's server."
       new-loc)))
 
 (defun %read-loom-store-classes (store root-loc)
-  (let ((root-plist (loom-store-get root-loc)))
+  (let ((root-plist (let ((*loom-reader-package* *loom-package*))
+                      (loom-store-get root-loc))))
     (assert (and (listp root-plist)
                  (eq (getf root-plist :type) 'loom-store)))
     (let* ((classes-loc (getf root-plist :classes-loc))
-           (package (find-package (getf root-plist :package)))
+           (package-name (getf root-plist :package))
+           (package (or (find-package package-name)
+                        (error "There is no package named ~s" package-name)))
            (usage-loc (getf root-plist :usage-loc))
            (class-hash (class-hash-of store)))
       (setf (classes-loc-of store) classes-loc
@@ -254,41 +264,58 @@ on LOOM-STORE's server."
 ;;; Reader dispatching
 ;;;
 
+(defmacro instantiating-class ((instance-var class loc) &body body)
+  (let ((thunk (gensym "THUNK")))
+    `(flet ((,thunk (,instance-var) ,@body))
+       (declare (dynamic-extent #',thunk))
+       (call-instantiating-class #',thunk ,class ,loc))))
+
+(defun call-instantiating-class (thunk class loc)
+  (unless (typep class 'class)
+    (setf class (find-class class)))
+  (let ((store *loom-store*)
+        (instance (allocate-instance class))
+        (done nil))
+    (setf (gethash instance (instance-to-loc-hash-of store)) loc
+          (gethash loc (loc-to-instance-hash-of store)) instance)
+    (unwind-protect
+         (multiple-value-prog1
+             (funcall thunk instance)
+           (setf done t))
+      (unless done
+        (remhash instance (instance-to-loc-hash-of store))
+        (remhash loc (loc-to-instance-hash-of store))))))
+
+(defvar *instantiating-instance* nil)
+
 (defmethod loom-store-reader-dispatch (stream (char (eql #\R)))
   (check-type *loom-store* loom-store)
   (destructuring-bind (class loc) (read stream)
     (let ((res (or (gethash loc (loc-to-instance-hash-of *loom-store*))
-                   (read-from-string (archive-touch loc)))))
-      (when class
-        (assert (typep res class)))
+                   (instantiating-class (*instantiating-instance* class loc)
+                     (read-from-string (archive-touch loc))))))
+      (assert (typep res class))
       res)))
-
-(defmethod loom-store-reader-dispatch (stream (char (eql #\I)))
-  (destructuring-bind (class-name . slot-values) (read stream)
-    (make-loom-store-instance class-name slot-values)))
 
 (defparameter *unbound-marker* '--unbound--)
 
-(defun make-loom-store-instance (class-name slot-values)
-  (check-type *loom-store* loom-store)
-  (assert *loom-read-location*)
-  (let* ((store *loom-store*)
-         (class-hash (class-hash-of store))
-         (loom-class (or (gethash class-name class-hash)
-                         (error "There is no loom class named ~s"
-                                class-name)))
-         (slots (slots-of loom-class))
-         (instance (allocate-instance (find-class class-name))))
-    (loop for slot in slots
-       for value in slot-values
-       when (and slot (not (eq value *unbound-marker*)))
-       do (setf (slot-value instance slot) value))
-    (shared-initialize instance t)
-    (setf (gethash *loom-read-location* (loc-to-instance-hash-of store))
-          instance
-          (gethash instance (instance-to-loc-hash-of store))
-          *loom-read-location*)
-    instance))
+(defmethod loom-store-reader-dispatch (stream (char (eql #\I)))
+  (destructuring-bind (class-name . slot-values) (read stream)
+    (let* ((store *loom-store*)
+           (class-hash (class-hash-of store))
+           (loom-class (or (gethash class-name class-hash)
+                           (error "There is no loom class named ~s"
+                                  class-name)))
+           (slots (slots-of loom-class))
+           (instance *instantiating-instance*))
+      (assert (eq (type-of instance) class-name))
+      (loop for slot in slots
+         for value in slot-values
+         when (and slot (not (eq value *unbound-marker*)))
+         ;; should catch errors here and remove offending slots
+         do (setf (slot-value instance slot) value))
+      (shared-initialize instance t)
+      instance)))
     
 ;;;
 ;;; Writer methods
@@ -437,13 +464,18 @@ of CLASS-OR-NAME that is in LOOM-STORE."
   (let* ((class-name (if (symbolp class-or-name)
                          class-or-name
                          (class-name class-or-name)))
+         (class (if (symbolp class-or-name)
+                    (find-class class-or-name)
+                    class-or-name))
          (loom-class (gethash class-name (class-hash-of loom-store)))
          (loc-to-instance-hash (loc-to-instance-hash-of loom-store)))
     (when loom-class
       (with-loom-store (loom-store)
         (do-linked-nodes (loc (instances-loc-of loom-class) class-name)
-          (let ((instance (or (gethash loc loc-to-instance-hash)
-                              (loom-store-get loc))))
+          (let ((instance
+                 (or (gethash loc loc-to-instance-hash)
+                     (instantiating-class (*instantiating-instance* class loc)
+                       (loom-store-get loc)))))
             (funcall function instance)))))))
 
 (defmacro do-loom-instances-of-class ((instance-var class-or-name &optional
