@@ -1,0 +1,3 @@
+[submodule "loom-perl"]
+	path = loom-perl
+	url = git://github.com/billstclair/Loom.git
