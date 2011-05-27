@@ -246,7 +246,8 @@ on LOOM-STORE's server."
            (package (or (find-package package-name)
                         (error "There is no package named ~s" package-name)))
            (usage-loc (getf root-plist :usage-loc))
-           (class-hash (class-hash-of store)))
+           (class-hash (class-hash-of store))
+           (loom-class-class (find-class 'loom-class)))
       (setf (classes-loc-of store) classes-loc
             (package-of store) package)
       (unless (usage-loc-of store)
@@ -254,8 +255,9 @@ on LOOM-STORE's server."
       (setf (gethash 'loom-class class-hash)
             (make-loom-class 'loom-class *loom-class-slots* classes-loc))
       (do-linked-nodes (loc classes-loc 'loom-class)
-        (let ((class (loom-store-get loc)))
-          (check-type class loom-class)
+        (let ((class (instantiating-class (*instantiating-instance*
+                                           loom-class-class loc)
+                       (loom-store-get loc))))
           ;; This will error if the class isn't defined, as desired.
           (find-class (class-name-of class))
           (setf (gethash (class-name-of class) class-hash) class))))))
