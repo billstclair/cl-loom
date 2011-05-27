@@ -236,6 +236,30 @@ on LOOM-STORE's server."
       (setf (loom-store-get node-loc usage-loc) node)
       new-loc)))
 
+(defmacro instantiating-class ((instance-var class loc) &body body)
+  (let ((thunk (gensym "THUNK")))
+    `(flet ((,thunk (,instance-var) ,@body))
+       (declare (dynamic-extent #',thunk))
+       (call-instantiating-class #',thunk ,class ,loc))))
+
+(defun call-instantiating-class (thunk class loc)
+  (unless (typep class 'class)
+    (setf class (find-class class)))
+  (let ((store *loom-store*)
+        (instance (allocate-instance class))
+        (done nil))
+    (setf (gethash instance (instance-to-loc-hash-of store)) loc
+          (gethash loc (loc-to-instance-hash-of store)) instance)
+    (unwind-protect
+         (multiple-value-prog1
+             (funcall thunk instance)
+           (setf done t))
+      (unless done
+        (remhash instance (instance-to-loc-hash-of store))
+        (remhash loc (loc-to-instance-hash-of store))))))
+
+(defvar *instantiating-instance* nil)
+
 (defun %read-loom-store-classes (store root-loc)
   (let ((root-plist (let ((*loom-reader-package* *loom-package*))
                       (loom-store-get root-loc))))
@@ -265,30 +289,6 @@ on LOOM-STORE's server."
 ;;;
 ;;; Reader dispatching
 ;;;
-
-(defmacro instantiating-class ((instance-var class loc) &body body)
-  (let ((thunk (gensym "THUNK")))
-    `(flet ((,thunk (,instance-var) ,@body))
-       (declare (dynamic-extent #',thunk))
-       (call-instantiating-class #',thunk ,class ,loc))))
-
-(defun call-instantiating-class (thunk class loc)
-  (unless (typep class 'class)
-    (setf class (find-class class)))
-  (let ((store *loom-store*)
-        (instance (allocate-instance class))
-        (done nil))
-    (setf (gethash instance (instance-to-loc-hash-of store)) loc
-          (gethash loc (loc-to-instance-hash-of store)) instance)
-    (unwind-protect
-         (multiple-value-prog1
-             (funcall thunk instance)
-           (setf done t))
-      (unless done
-        (remhash instance (instance-to-loc-hash-of store))
-        (remhash loc (loc-to-instance-hash-of store))))))
-
-(defvar *instantiating-instance* nil)
 
 (defmethod loom-store-reader-dispatch (stream (char (eql #\R)))
   (check-type *loom-store* loom-store)
