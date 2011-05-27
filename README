@@ -1,0 +1,13 @@
+cl-loom is a Common Lisp library for accessing the Loom.cc server.
+
+If you wish to use it to simply access https://loom.cc/, you won't
+need the loom-perl submodule. If you want to run your own local Loom
+module, however, you should do "git submodule init; git submodule
+update" in a shell in this directory to load the Loom perl code (or
+use the "git-submodule-init" script). It currently works with v110 of
+the Loom code. Patrick Chkoreff has since reorganized Loom, but I
+haven't yes updated the library to work with the new Loom code.
+
+Bill St. Clair
+bill@billstclair.com
+26 May, 2011
