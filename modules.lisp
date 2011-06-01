@@ -28,6 +28,10 @@
             "loom-objects"
 	    )))
 
+(in-package :cl-user)
+
+(defparameter *cl-loom-source-file* *load-truename*)
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
 ;;; Copyright 2011 TSC AG, Postfach 73, CH 6314 Unterageri, Switzerland
