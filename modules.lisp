@@ -17,9 +17,8 @@
 (asdf:oos 'asdf:load-op 'closer-mop)
 
 (with-system-name (:cl-loom)
-
-  (define-root-directory :cl-loom  *load-truename*)
-  
+  (define-root-directory :cl-loom
+      *load-truename*)
   (define-module :cl-loom
     (:directory :cl-loom)
     (:files "package"
