@@ -231,6 +231,17 @@ the loom.cc server."
 
 (defvar *attempting-loom-server-startup* nil)
 
+(defun git-submodule-init ()
+  (let* ((dir (directory-namestring cl-user::*cl-loom-source-file*)))
+    (unless (eql 0 (asdf::run-shell-command "cd '~a'; ./git-submodule-init" dir))
+      (error "Error running git-submodule-init"))))
+
+(defun ensure-loom-perl-loaded (binary-pathname)
+  (unless (probe-file binary-pathname)
+    (git-submodule-init)
+    (unless (probe-file binary-pathname)
+      (error "Can't load Loom perl code"))))
+
 ;; See https://github.com/billstclair/Loom/wiki/Config
 (defun attempt-loom-server-startup (&optional (initialize-p t))
   (with-server-bound ()
@@ -244,7 +255,7 @@ the loom.cc server."
            (binary-pathname (config-path 'binary-path)))
       (unless (and config-dir binary-pathname)
         (error "Can't start up non-local Loom server: ~s" server))
-
+      (ensure-loom-perl-loaded binary-pathname)
       ;; Shut down server
       (asdf:run-shell-command "'~a' -n" binary-pathname)
 

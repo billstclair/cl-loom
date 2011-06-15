@@ -9,7 +9,7 @@
  (path "/")
  (use-ssl nil) ;; t or nil
  (local t) ;; t or nil
- (base-dir #P"/home/lisp/ec/lisp/Loom/")
+ (base-dir #.(module-manager:get-directory :cl-loom :up))
  (config-dir #P"data/conf")
  (binary-path #P"code/loom")
  )
