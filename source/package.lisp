@@ -1,7 +1,15 @@
 (in-package :cl-user)
 
 (defpackage loom
-  (:use #:common-lisp :anaphora)
+  (:use :closer-mop
+        :common-lisp
+        :anaphora)
+  (:shadowing-import-from closer-mop
+                          standard-method
+                          standard-generic-function
+                          defmethod
+                          defgeneric
+                          standard-class)
   (:export #:c-escape
            #:c-unescape
 

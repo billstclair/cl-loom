@@ -2,11 +2,41 @@
 
 (in-package :loom)
 
+;;;; ===========================================================================
+;;;; ===========================================================================
 ;;;;
 ;;;; Loom objects
 ;;;; A simple persistence mechanism for storing
 ;;;; lisp objects in the loom archive
 ;;;;
+;;;; ===========================================================================
+;;;; ===========================================================================
+
+;;; ----------------------------------------------------------------------------
+;;; Global variables
+;;; ----------------------------------------------------------------------------
+
+(defvar *loom-store* nil
+  "The current loom store")
+
+(defvar *loom-reader-package* nil
+  "Override (package-of loom-store) during initialization")
+
+(defparameter *loom-package* (find-package :loom)
+  "The default loom-store package.")
+
+(defparameter *loom-class-slots*
+  '(class-name slots instances-loc))
+
+;;; ============================================================================
+;;; 
+;;; Loom store classes
+;;; 
+;;; ============================================================================
+
+;;; ----------------------------------------------------------------------------
+;;; Class definitions
+;;; ----------------------------------------------------------------------------
 
 (defclass loom-class ()
   ((class-name :initarg :class-name
@@ -20,37 +50,33 @@
                   :type (or loom-loc null)
                   :documentation "Location of linked list of instance locations")))
 
-(defmethod print-object ((class loom-class) stream)
-  (print-unreadable-object (class stream :type t)
-    (prin1 (class-name-of class))))
-
-(defun make-loom-class (class-name slots &optional instances-loc)
-  (make-instance 'loom-class
-                 :class-name class-name
-                 :slots slots
-                 :instances-loc instances-loc))
-
-(defparameter *loom-class-slots*
-  '(class-name slots instances-loc))
+;;; ----------------------------------------------------------------------------
 
 (defclass loom-store ()
-  ((server :initarg :server :accessor server-of :type loom-server)
-   (usage-loc :initarg :usage-loc
-              :initform nil
-              :accessor usage-loc-of
-              :type (or loom-loc null))
-   (root-loc :initarg :root-loc
-             :initform nil
-             :accessor root-loc-of
-             :type (or loom-loc null))
-   (classes-loc :initarg :classes-loc
-                :initform nil
-                :accessor classes-loc-of
-                :type (or loom-loc null))
-   (package :initarg :package
-            :initform *package*
-            :accessor package-of
-            :type package)
+  ((server
+    :initarg :server
+    :accessor server-of
+    :type loom-server)
+   (usage-loc
+    :initarg :usage-loc
+    :initform nil
+    :accessor usage-loc-of
+    :type (or loom-loc null))
+   (root-loc
+    :initarg :root-loc
+    :initform nil
+    :accessor root-loc-of
+    :type (or loom-loc null))
+   (classes-loc
+    :initarg :classes-loc
+    :initform nil
+    :accessor classes-loc-of
+    :type (or loom-loc null))
+   (package
+    :initarg :package
+    :initform *package*
+    :accessor package-of
+    :type package)
    (loc-to-instance-hash
     :initform (make-hash-table :test 'equal)
     :accessor loc-to-instance-hash-of
@@ -59,14 +85,37 @@
     :initform (make-hash-table :test 'equal)
     :accessor instance-to-loc-hash-of
     :documentation "instance->  location")
-   (class-hash :initform (make-hash-table :test 'eq)
-               :accessor class-hash-of
-               :documentation "class-name => loom-class instance")
+   (class-hash
+    :initform (make-hash-table :test 'eq)
+    :accessor class-hash-of
+    :documentation "class-name => loom-class instance")
    ))
+
+;;; ----------------------------------------------------------------------------
+;;; loom-class methods
+;;; ----------------------------------------------------------------------------
+
+(defmethod print-object ((class loom-class) stream)
+  (print-unreadable-object (class stream :type t)
+    (prin1 (class-name-of class))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun make-loom-class (class-name slots &optional instances-loc)
+  (make-instance 'loom-class
+                 :class-name class-name
+                 :slots slots
+                 :instances-loc instances-loc))
+
+;;; ----------------------------------------------------------------------------
+;;; loom-store methods
+;;; ----------------------------------------------------------------------------
 
 (defmethod initialize-instance :after ((store loom-store)
                                        &key &allow-other-keys)
   (initialize-loom-store store))
+
+;;; ----------------------------------------------------------------------------
 
 (defmethod print-object ((store loom-store) stream)
   (print-unreadable-object (store stream :type t)
@@ -74,10 +123,17 @@
             (base-uri-of (server-of store))
             (root-loc-of store))))
 
-(defun make-loom-store (&key (server *loom-server*)
+;;; ============================================================================
+;;; 
+;;; Loom store creation and initialization
+;;; 
+;;; ============================================================================
+
+(defun make-loom-store (&key
+                        (server *loom-server*)
                         root-loc
                         usage-loc
-                        package)
+                        (package *package*))
   "Make a database to store lisp objects in a loom archive.
 SERVER is a LOOM-SERVER, default: *LOOM-SERVER*.
 ROOT-LOC, if specified, is a previous MAKE-LOOM-STORE result.
@@ -104,7 +160,7 @@ Returns a LOOM-STORE instance."
                  :root-loc root-loc
                  :package package))
 
-(defvar *loom-store* nil)
+;;; ----------------------------------------------------------------------------
 
 (defmacro with-loom-store ((loom-store) &body body)
   "Binds *LOOM-STORE* to LOOM-STORE and executes BODY with a transaction
@@ -113,12 +169,59 @@ on LOOM-STORE's server."
      (with-loom-transaction (:server (server-of *loom-store*))
        ,@body)))
 
+;;; ----------------------------------------------------------------------------
+
 (defun initialize-loom-store (store)
   (with-loom-store (store)
     (let ((root-loc (root-loc-of store)))
       (if root-loc
           (%read-loom-store-classes store root-loc)
           (%initialize-new-loom-store store)))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun %initialize-new-loom-store (store)
+  (let ((root-loc (random-vacant-archive-loc))
+        (classes-loc (random-vacant-archive-loc))
+        (usage-loc (usage-loc-of store))
+        (package (package-of store)))
+    (check-type usage-loc loom-loc)
+    (check-type package package)
+    (archive-buy root-loc usage-loc)
+    (archive-buy classes-loc usage-loc)
+    (let ((root-plist (list :type 'loom-store
+                            :classes-loc classes-loc
+                            :package (package-name package)
+                            :usage-loc usage-loc))
+          (classes `((loom-class nil . nil))))
+      (setf (loom-store-get classes-loc) classes)
+      (let ((*loom-reader-package* *loom-package*))
+        (setf (loom-store-get root-loc) root-plist))
+      (setf (root-loc-of store) root-loc
+            (classes-loc-of store) classes-loc
+            (gethash 'loom-class (class-hash-of store))
+            (make-loom-class 'loom-class *loom-class-slots* classes-loc))))
+  store)
+
+;;; ----------------------------------------------------------------------------
+
+(defun loom-class-node-p (list)
+  (loom-linked-node-p list 'loom-class))
+
+;;; ----------------------------------------------------------------------------
+
+(defun loom-linked-node-p (list class-name)
+  (and (listp list)
+       (let ((links (car list)))
+         (and (listp links)
+              (eq (car links) class-name)
+              (listp (cdr links))
+              (typep (cadr links) '(or null loom-loc))
+              (typep (cddr links) '(or null loom-loc))))))
+
+;;; ----------------------------------------------------------------------------
+;;; Read table stuff -- deprecated
+;;; ----------------------------------------------------------------------------
 
 (defparameter *loom-store-readtable*
   (let ((rt (copy-readtable)))
@@ -149,59 +252,83 @@ on LOOM-STORE's server."
           (*readtable* *loom-store-readtable*))
       (funcall thunk))))
 
-(defvar *loom-read-location* nil)
+;;; ============================================================================
+;;; 
+;;; Persistence reader/writer definitions
+;;; 
+;;; ============================================================================
 
-(defun loom-store-get (loc &optional usage-loc)
-  (declare (ignore usage-loc))
-  (with-loom-store-reader ()
-    (let ((*loom-read-location* loc))
-      (read-from-string (archive-touch loc)))))
+;;; ----------------------------------------------------------------------------
+;;; Reader/writer function hashes
+;;; ----------------------------------------------------------------------------
 
-(defun (setf loom-store-get) (value loc &optional usage-loc)
-  (with-standard-io-syntax
-    (let ((*package* (or *loom-reader-package* (package-of *loom-store*)))
-          (*print-circle* t)
-          (*print-readably* t))
-      (archive-write loc
-                     (with-output-to-string (s)
-                       (write-to-loom-store value s))
-                     (or usage-loc (usage-loc-of *loom-store*)))
-      value)))
+(defvar *loom-value-writers*
+  (make-hash-table :test 'eq)
+  "Map type symbols to functions taking an object of that type as a single
+argument, and returning a string.")
 
-(defun %initialize-new-loom-store (store)
-  (let ((root-loc (random-vacant-archive-loc))
-        (classes-loc (random-vacant-archive-loc))
-        (usage-loc (usage-loc-of store))
-        (package (package-of store)))
-    (check-type usage-loc loom-loc)
-    (check-type package package)
-    (archive-buy root-loc usage-loc)
-    (archive-buy classes-loc usage-loc)
-    (let ((root-plist (list :type 'loom-store
-                            :classes-loc classes-loc
-                            :package (package-name package)
-                            :usage-loc usage-loc))
-          (classes `((loom-class nil . nil))))
-      (setf (loom-store-get classes-loc) classes)
-      (let ((*loom-reader-package* *loom-package*))
-        (setf (loom-store-get root-loc) root-plist))
-      (setf (root-loc-of store) root-loc
-            (classes-loc-of store) classes-loc
-            (gethash 'loom-class (class-hash-of store))
-            (make-loom-class 'loom-class *loom-class-slots* classes-loc))))
-  store)
+(defvar *loom-value-readers*
+  (make-hash-table :test 'eq)
+  "Map type symbols to functions taking a string and returning an object
+of the keyed type.")
 
-(defun loom-class-node-p (list)
-  (loom-linked-node-p list 'loom-class))
+;;; ----------------------------------------------------------------------------
+;;; Storage struct definitions
+;;; ----------------------------------------------------------------------------
 
-(defun loom-linked-node-p (list class-name)
-  (and (listp list)
-       (let ((links (car list)))
-         (and (listp links)
-              (eq (car links) class-name)
-              (listp (cdr links))
-              (typep (cadr links) '(or null loom-loc))
-              (typep (cddr links) '(or null loom-loc))))))
+(defstruct %loom-root
+  "Defines the structure used to serialize the root node of the store.
+Contains references to the %loom-node storing class locations, the usage-token
+location, and the package used for the lisp reader."
+  (class-loc nil :type (or string null))
+  (usage-loc nil :type (or string null))
+  (package (package-name *package*) :type (or string null)))
+
+;;; ----------------------------------------------------------------------------
+
+(defstruct %loom-node
+  "Defines the structure used to serialize interior nodes, such as the list of 
+class/location pairs referenced by the %loom-root, and the list of instance-id/
+instance-location pairs stored at each class's location."
+  (type nil :type (or symbol null))
+  (next nil :type (or string null))
+  (elements nil :type (or cons null)))
+
+;;; ----------------------------------------------------------------------------
+
+(defstruct %loom-object
+  "Defines the structure used to serialize object instances within the store.
+'Class' stores the symbol-name of this object's class, and 'slots' stores
+a list of slot-name/slot-type/slot-location triples (symbol symbol string).
+The function hashed at slot-type from *loom-value-[readers/writers]* will be
+used to read the leaf and return a lisp object."
+  (class nil :type (or symbol null))
+  (slots nil :type (or cons null)))
+
+;;; ----------------------------------------------------------------------------
+;;; Raw Loom accessor functions
+;;; ----------------------------------------------------------------------------
+
+(defun loom-store-get (loc)
+  "Returns a lisp object stored at loc with standard read syntax."
+  (with-loom-store (*loom-store*)
+    (with-standard-io-syntax
+      (let ((*package* (package-of *loom-store*)))
+        (read-from-string (archive-touch loc))))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun (setf loom-store-get) (value loc)
+  "Write a lisp object 'value' to loc with prin1"
+  (with-loom-store (*loom-store*)
+    (archive-write loc
+                   (with-standard-io-syntax
+                     (let ((*package* (package-of *loom-store*)))
+                       (with-output-to-string (str)
+                         (prin1 value str))))
+                   (usage-loc-of *loom-store*))
+    value))
+
 
 (defun map-linked-nodes (function node-loc class-name)
   (loop for nl = node-loc then (cddr links)
@@ -382,6 +509,10 @@ Returns OBJECT."
   (with-loom-store (loom-store)
     (%loom-persist-standard-object loom-store object nil)))
 
+(defun %loom-persist-class (store class)
+  (unless (gethash (class-name class) (class-hash-of store))
+    (let 
+
 (defun %loom-persist-standard-object (store object not-present-p)
   (let* ((class-name (class-name (class-of object)))
          (class-hash (class-hash-of store))
@@ -522,6 +653,28 @@ Returns a LOOM-STORE instance."
                  (setf (get-wallet location nil (or usage location))
                        wallet)
                  store))))))
+
+;;; ============================================================================
+;;; Persistant Object Definition
+;;; ============================================================================
+
+(defclass loom-persist (standard-class)
+  ((%ignore-slots :accessor :ignore
+                     :initform nil
+                     :type (or list nil)
+                     :documentation
+                     "A list of slot names that will notbe persisted."))
+  (:documentation
+   "A metaclass that will be persisted to the current *loom-store*."))
+
+(defmethod validate-superclass ((a loom-persist) (b standard-class))
+  t)
+
+(defmethod finalize-inheritance :after ((class loom-persist))
+  (let ((
+
+;(defmethod ensure-class-using-class (
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
