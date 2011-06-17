@@ -189,12 +189,20 @@ instance-location pairs stored at each class's location."
 
 ;;; ----------------------------------------------------------------------------
 
+(defstruct %loom-untracked-object
+  "Defines a struct used to store raw key/value pairs. 'Pairs' is list of quads
+defining (type key type value). The each key/value is a reference to a loom-loc
+that is [de]serialized by the methods [read-from/write-to]-loom-store method."
+  (pairs nil :type (or cons null)))
+
+;;; ----------------------------------------------------------------------------
+
 (defstruct %loom-object
   "Defines the structure used to serialize object instances within the store.
 'Class' stores the symbol-name of this object's class, and 'slots' stores
 a list of slot-name/slot-type/slot-location triples (symbol symbol string).
 The function hashed at slot-type from *loom-value-[readers/writers]* will be
-used to read the leaf and return a lisp object."
+used to read/write the leaf and return a lisp object."
   (class nil :type (or symbol null))
   (slots nil :type (or cons null)))
 
@@ -307,7 +315,7 @@ reader package for loom-store serialization. Binds the resulting loom-store to
                      (make-%loom-node :type 'class-list))
                :untracked-objects-loc
                (setf (%loom-store-get nil package-name usage-loc)
-                     (make-%loom-object))
+                     (make-%loom-untracked-object))
                :usage-loc usage-loc
                :package package-name))))
     (multiple-value-bind (value loc)
