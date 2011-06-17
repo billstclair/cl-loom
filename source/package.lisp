@@ -1,17 +1,30 @@
 (in-package :cl-user)
 
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun conflicting-symbols-between (base import)
+    (unless (packagep base) (setf base (find-package base)))
+    (unless (packagep import) (setf import (find-package import)))
+    (let (collect)
+      (mapcar (lambda (package)
+                (do-external-symbols (v package)
+                  (multiple-value-bind (symbol ext)
+                      (find-symbol (symbol-name v) import)
+                    (when (eq ext :external)
+                      (push symbol collect)))))
+              (cons base (package-use-list base)))
+      collect)))
+
 (defpackage loom
   (:use :closer-mop
         :common-lisp
         :trivial-garbage
         :anaphora)
-  ;; do this automatically, now!
-  (:shadowing-import-from closer-mop
-                          standard-method
-                          standard-generic-function
-                          defmethod
-                          defgeneric
-                          standard-class)
+
+  ;; Shadow conflicting closer-mop symbols before :use
+  #.(nconc '(:shadowing-import-from closer-mop)
+           (conflicting-symbols-between :cl :closer-mop))
+  (:import-from cl-user conflicting-symbols-between)
+
   (:export #:c-escape
            #:c-unescape
 
