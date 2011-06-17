@@ -3,7 +3,9 @@
 (defpackage loom
   (:use :closer-mop
         :common-lisp
+        :trivial-garbage
         :anaphora)
+  ;; do this automatically, now!
   (:shadowing-import-from closer-mop
                           standard-method
                           standard-generic-function

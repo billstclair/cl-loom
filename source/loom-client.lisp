@@ -2,9 +2,17 @@
 
 (in-package :loom)
 
+;;;; ===========================================================================
+;;;; ===========================================================================
 ;;;;
 ;;;; Loom client
 ;;;;
+;;;; ===========================================================================
+;;;; ===========================================================================
+
+;;; ----------------------------------------------------------------------------
+;;; Global variables
+;;; ----------------------------------------------------------------------------
 
 (defparameter *configuration-file*
   (merge-pathnames
@@ -14,13 +22,11 @@
 
 (defparameter *configuration*
   (let ((path *configuration-file*))
-    (with-open-file (str path :direction :input :if-does-not-exist nil)
-      (or (and str (read str nil nil))
-          (error (format nil "Failed to read ~s" path))))))
+    (with-standard-io-syntax
+      (with-open-file (str path :direction :input :if-does-not-exist nil)
+        (or (and str (read str nil nil))
+            (error (format nil "Failed to read ~s" path)))))))
 
-;; Typically configuration is loaded from <basedir>/configuration.sexp
-;; This is used only when :default-setup-p t is passed to (make-instance 'server ...)
-;; or when no configuration.sexp file is found.
 (defparameter *default-configuration*
   '(loom-configuration
     (hostname "loom.cc")
@@ -30,17 +36,47 @@
     (local nil)
     (base-dir :unused)
     (config-dir :unused)
-    (binary-path :unused)))
+    (binary-path :unused))
+  "Typically configuration is loaded from <basedir>/configuration.sexp
+This is used only when :default-setup-p t is passed to (make-instance 'server ...)
+or when no configuration.sexp file is found.")
+
+;;; ----------------------------------------------------------------------------
+;;; Configuration functions
+;;; ----------------------------------------------------------------------------
 
 (defun config-option (option &optional (config *configuration*))
   (cadr (assoc option (cdr config) :test #'eq)))
 
+;;; ----------------------------------------------------------------------------
+
 (defun (setf config-option) (new-value option &optional (config *configuration*))
-  (car (rplaca (cdr (assoc option (cdr config) :test #'eq)) new-value)))
+  (let ((search (assoc option (cdr config) :test #'eq)))
+    (if search
+        (car (rplaca (cdr search) new-value))
+        (nconc config
+               (list (list option new-value))))))
+
+;;; ----------------------------------------------------------------------------
 
 (defun config-path (name &optional (config *configuration*))
   (merge-pathnames (config-option name config)
                    (config-option 'base-dir config)))
+
+;;; ----------------------------------------------------------------------------
+
+(defun save-configuration (&key
+                           (path *configuration-file*)
+                           (config *configuration*))
+  (with-open-file (file path
+                        :direction :output
+                        :if-exists :supersede
+                        :if-does-not-exist :create)
+    (let ((*print-pretty* t)
+          (*print-case* :downcase))
+      (pprint-linear file config t))))
+
+;;; ----------------------------------------------------------------------------
 
 (defun generate-uri (&optional (config *configuration*))
   (format nil "~a://~a:~a~a"

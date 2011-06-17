@@ -15,6 +15,7 @@
 (asdf:oos 'asdf:load-op 'split-sequence)
 (asdf:oos 'asdf:load-op 'flexi-streams)
 (asdf:oos 'asdf:load-op 'closer-mop)
+(asdf:oos 'asdf:load-op 'trivial-garbage)
 
 (with-system-name (:cl-loom)
   (define-root-directory :cl-loom
