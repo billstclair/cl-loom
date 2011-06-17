@@ -531,11 +531,56 @@ on LOOM-STORE's server."
       (shared-initialize instance t)
       instance)))
     
+;;; ============================================================================
+;;; 
+;;; Loom store reader/writer methods
+;;; 
+;;; ============================================================================
+
+;;;
+;;; Reader methods
+;;;
+
+(defvar *loom-store-read-string* nil
+  "A special variable bound to the raw string returned by loom.")
+
+;;; ----------------------------------------------------------------------------
+
+(defgeneric read-from-location (type location)
+  (:argument-precedence-order location type)
+  (:documentation "Reads an object of 'type' from the location.
+*loom-store-read-string* is available. Methods should eql-specialize on type."))
+
+;;; ----------------------------------------------------------------------------
+
+(defmethod read-from-location (type location)
+  nil)
+
 ;;;
 ;;; Writer methods
 ;;;
 
-(defmethod write-to-loom-store (object stream)
+(defgeneric write-to-location (object location)
+  (:argument-precedence-order location object)
+  (:documentation "Writes an object to the location, with updates to
+*loom-store*."))
+
+;;; ----------------------------------------------------------------------------
+
+(defmethod write-to-location :before (object (location (eql t)))
+  (declare (ignore object))
+  (archive-buy location (usage-loc-of *loom-store*))
+  (call-next-method))
+
+;;; ----------------------------------------------------------------------------
+
+(defmethod write-to-location (object location)
+  (declare (ignore location))
+  (error "Cannot write: unknown type ~A [~A]" (type-of object) object))
+
+;;; ----------------------------------------------------------------------------
+
+(defmethod write-to-stream (object stream)
   (prin1 object stream))
 
 ;; Eventually, handle circular lists here
