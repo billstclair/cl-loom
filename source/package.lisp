@@ -18,6 +18,7 @@
   (:use :closer-mop
         :common-lisp
         :trivial-garbage
+        :alexandria
         :anaphora)
 
   ;; Shadow conflicting closer-mop symbols before :use

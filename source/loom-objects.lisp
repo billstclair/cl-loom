@@ -28,6 +28,7 @@
 (defparameter *loom-class-slots*
   '(class-name slots instances-loc))
 
+
 ;;; ============================================================================
 ;;; 
 ;;; Loom store classes
@@ -45,27 +46,31 @@
     :initform nil
     :type (or list nil)
     :documentation "A list of slot names that will not be persisted.")
-   (instances
-    :accessor instances-of
+   (loom-store
+    :accessor loom-store-of
+    :initform *loom-store*
+    :type (or null loom-store)
+    :documentation "The associated loom-store.")
+   (id-counter
+    :accessor id-counter-of
+    :initform 0
+    :type integer
+    :documentation "A newly allocated instance will receive this id,
+and this slot will be incremented")
+   (instances->ids
+    :accessor instances->ids-of
+    :initform (make-weak-hash-table :weakness :key)
+    :type hash-table
+    :documentation "A weak hashtable mapping instances -> ids")
+   (ids->instances
+    :accessor ids->instances-of
     :initform (make-weak-hash-table :weakness :value
                                     :test #'eql)
     :type hash-table
-    :documentation "A weak hashtable mapping instance id's -> instances"))
+    :documentation "A weak hashtable mapping instance ids -> instances"))
   (:documentation
    "A metaclass, classes of which will have themselves, and instances of
 themselves be persisted to the current *loom-store*."))
-
-(defclass loom-class ()
-  ((class-name :initarg :class-name
-               :accessor class-name-of
-               :documentation "The name of the user class")
-   (slots :initarg :slots :accessor slots-of :type list
-          :documentation "List of slot names")
-   (instances-loc :initarg :instances-loc
-                  :initform nil
-                  :accessor instances-loc-of
-                  :type (or loom-loc null)
-                  :documentation "Location of linked list of instance locations")))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -99,18 +104,30 @@ themselves be persisted to the current *loom-store*."))
     :initform *package*
     :accessor package-of
     :type package)
+   (untracked-key-value-loc-hash
+    :initform (make-hash-table :test 'equalp)
+    :accessor untracked-key-value-loc-hash
+    :documentation "untracked object key -> value loc")
+   (id-to-location-hash
+    :initform (make-hash-table :test 'eql)
+    :accessor id-to-location-hash-of
+    :documentation "id -> location")
+   (location-to-id-hash
+    :initform (make-hash-table :test 'equal)
+    :accessor location-to-id-hash-of
+    :documentation "location -> id")
    (loc-to-instance-hash
     :initform (make-hash-table :test 'equal)
     :accessor loc-to-instance-hash-of
-    :documentation "location->  instance")
+    :documentation "location -> instance")
    (instance-to-loc-hash
     :initform (make-hash-table :test 'equal)
     :accessor instance-to-loc-hash-of
-    :documentation "instance->  location")
+    :documentation "instance -> location")
    (class-hash
     :initform (make-hash-table :test 'eq)
     :accessor class-hash-of
-    :documentation "class-name => loom-class instance")
+    :documentation "class-name -> class metaobject")
    ))
 
 ;;; 
@@ -121,7 +138,7 @@ themselves be persisted to the current *loom-store*."))
   (print-unreadable-object (class stream :type t)
     (prin1 (class-name-of class))))
 
-;;; ----------------------------------------------------------------------------
+ ;;; ----------------------------------------------------------------------------
 
 (defun make-loom-class (class-name slots &optional instances-loc)
   (make-instance 'loom-class
@@ -192,7 +209,9 @@ instance-location pairs stored at each class's location."
 (defstruct %loom-untracked-object
   "Defines a struct used to store raw key/value pairs. 'Pairs' is list of quads
 defining (type key type value). The each key/value is a reference to a loom-loc
-that is [de]serialized by the methods [read-from/write-to]-loom-store method."
+that is [de]serialized by the methods [read-from/write-to]-loom-store method.
+When value-type is 'gc, and value is nil, the object may be garbage collected."
+  (next nil :type (or string null))
   (pairs nil :type (or cons null)))
 
 ;;; ----------------------------------------------------------------------------
@@ -204,7 +223,16 @@ a list of slot-name/slot-type/slot-location triples (symbol symbol string).
 The function hashed at slot-type from *loom-value-[readers/writers]* will be
 used to read/write the leaf and return a lisp object."
   (class nil :type (or symbol null))
+  (next nil :type (or string null))
   (slots nil :type (or cons null)))
+
+;;; ----------------------------------------------------------------------------
+
+(defstruct %loom-indirection
+  "Defines a reference to another loom object. A nil ref represents an unbound
+reference."
+  (type nil :type (or symbol null))
+  (ref nil :type (or string null)))
 
 ;;; 
 ;;; Raw Loom accessor functions
@@ -228,7 +256,8 @@ Uses the values from *loom-store*"
 (defun (setf %loom-store-get) (value loc package usage)
   "Write a lisp object 'value' to loc with prin1. Create loc if necessary."
   ;; buy a new location if we don't have one
-  (unless (and loc (typep loc 'loom-loc))
+  (check-type loc (or null loom-loc))
+  (when (eq loc nil)
     (setf loc (random-vacant-archive-loc))
     (archive-buy loc usage))
   (archive-write loc
@@ -250,9 +279,94 @@ Uses the values from *loom-store*"
                            (usage-loc-of *loom-store*))
           value)))
 
+;;; ----------------------------------------------------------------------------
+
+(defun loom-store-sell (location)
+  (handler-case (progn
+                  (archive-write location "" (usage-loc-of *loom-store*))
+                  (archive-sell location (usage-loc-of *loom-store*) t)
+                  t)
+    (loom-client-error () nil)))
+
 ;;; ============================================================================
 ;;; 
-;;; Loom store creation and initialization
+;;; Basic generic loom node manipulators
+;;; 
+;;; ============================================================================
+
+(defun linked-node-create (node &optional elements)
+  "Creates a new linked node of the same type/class as node"
+  (etypecase node
+    (%loom-node
+     (make-%loom-node
+      :type (%loom-node-type node)
+      :elements elements))
+    (%loom-untracked-object
+     (make-%loom-untracked-object
+      :pairs elements))
+    (%loom-object
+     (make-%loom-object 
+      :class (%loom-object-class node)
+      :slots elements))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun linked-node-next (node)
+  (slot-value node 'next))
+
+(defun (setf linked-node-next) (value node)
+  (setf (slot-value node 'next) value))
+
+;;; ----------------------------------------------------------------------------
+
+(defun linked-node-elements (node)
+  (slot-value node
+              (etypecase node
+                (%loom-node 'elements)
+                (%loom-untracked-object 'pairs)
+                (%loom-object 'slots))))
+
+(defun (setf linked-node-elements) (value node)
+  (setf (slot-value node
+                    (etypecase node
+                      (%loom-node 'elements)
+                      (%loom-untracked-object 'pairs)
+                      (%loom-object 'slots)))
+        value))
+
+;;; ----------------------------------------------------------------------------
+
+(defun map-linked-nodes (fn location)
+  "Maps a function of (location node) over the linked nodes."
+  (let* ((current (and (typep location 'loom-loc)
+                       (loom-store-get location)))
+         (next (and current (linked-node-next current))))
+    (when current
+      (funcall fn location current)
+      (when (typep next 'loom-loc)
+        (map-linked-nodes fn next)))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun collect-linked-nodes (location)
+  (let (collect)
+    (map-linked-nodes (lambda (location current)
+                        (declare (ignore location))
+                        (push current collect))
+                      location)
+    (nreverse collect)))
+
+;;; ----------------------------------------------------------------------------
+
+(defmacro do-linked-nodes ((location) &body body)
+  (let ((thunk (gensym "THUNK")))
+    `(flet ((,thunk (,location) ,@body))
+       (declare (dynamic-extent #',thunk))
+       (map-linked-nodes #',thunk ,location))))
+
+;;; ============================================================================
+;;; 
+;;; Loom store creation and modification
 ;;; 
 ;;; ============================================================================
 
@@ -311,11 +425,13 @@ reader package for loom-store serialization. Binds the resulting loom-store to
           (or (when root-loc (loom-store-get root-loc))
               (make-%loom-root
                :class-loc
-               (setf (%loom-store-get nil package-name usage-loc)
-                     (make-%loom-node :type 'class-list))
+               (nth-value 1
+                          (setf (%loom-store-get nil package-name usage-loc)
+                                (make-%loom-node :type 'class-list)))
                :untracked-objects-loc
-               (setf (%loom-store-get nil package-name usage-loc)
-                     (make-%loom-untracked-object))
+               (nth-value 1
+                          (setf (%loom-store-get nil package-name usage-loc)
+                                (make-%loom-untracked-object)))
                :usage-loc usage-loc
                :package package-name))))
     (multiple-value-bind (value loc)
@@ -328,7 +444,7 @@ reader package for loom-store serialization. Binds the resulting loom-store to
       (make-instance 'loom-store
                      :server server
                      :root-loc loc
-                     :class-loc (%loom-root-class-loc root-node)
+                     :classes-loc (%loom-root-class-loc root-node)
                      :untracked-objects-loc (%loom-root-untracked-objects-loc
                                              root-node)
                      :usage-loc (%loom-root-usage-loc root-node)
@@ -345,40 +461,49 @@ on LOOM-STORE's server."
 
 ;;; ----------------------------------------------------------------------------
 
+(defun %read-class-instances (store instance-loc)
+  (let* ((instance-nodes (collect-linked-nodes
+                          instance-loc))
+         (elements (mapcan #'%loom-node-elements instance-nodes)))
+    (loop
+       for id/location-pair in elements
+       for id = (car id/location-pair)
+       for location = (cadr id/location-pair)
+       do
+         (setf (gethash id (id-to-location-hash-of store)) location))))
+
+;;; ----------------------------------------------------------------------------
+
 (defun %read-loom-store-classes (store)
   (let* ((root-node (loom-store-get (root-loc-of store)))
-         (class-node (loom-store-get (%loom-root-class-loc root-node))))
-    (assert (eq (%loom-node-type class-node) 'class-node))
-            
-    #+no(assert (and (listp root-plist)
-                 (eq (getf root-plist :type) 'loom-store)))
-    #+no
-    (let* ((classes-loc (getf root-plist :classes-loc))
-           (package-name (getf root-plist :package))
-           (package (or (find-package package-name)
-                        (error "There is no package named ~s" package-name)))
-           (usage-loc (getf root-plist :usage-loc))
-           (class-hash (class-hash-of store))
-           (loom-class-class (find-class 'loom-class)))
-      (setf (classes-loc-of store) classes-loc
-            (package-of store) package)
-      (unless (usage-loc-of store)
-        (setf (usage-loc-of store) usage-loc))
-      (setf (gethash 'loom-class class-hash)
-            (make-loom-class 'loom-class *loom-class-slots* classes-loc))
-      (do-linked-nodes (loc classes-loc 'loom-class)
-        (let ((class (instantiating-class (*instantiating-instance*
-                                           loom-class-class loc)
-                       (loom-store-get loc))))
-          ;; This will error if the class isn't defined, as desired.
-          (find-class (class-name-of class))
-          (setf (gethash (class-name-of class) class-hash) class))))))
+         (class-nodes (collect-linked-nodes
+                       (%loom-root-class-loc root-node)))
+         (elements (mapcan #'%loom-node-elements class-nodes)))
+    (loop
+       for class/location-pair in elements
+       for class = (car class/location-pair)
+       for location = (cadr class/location-pair)
+       do
+         (setf (gethash class (class-hash-of store))
+               (find-class class))
+         (%read-class-instances store location))))
 
 ;;; ----------------------------------------------------------------------------
 
 (defun %read-loom-store-untracked-objects (store)
-  ;
-  )
+  (let* ((root-node (loom-store-get (root-loc-of store)))
+         (untracked-nodes (collect-linked-nodes
+                           (%loom-root-untracked-objects-loc root-node)))
+         (elements (mapcan #'%loom-untracked-object-pairs untracked-nodes)))
+    (loop
+       for k/v-quad in elements
+       for key-type = (elt k/v-quad 0)
+       for key-object-loc = (elt k/v-quad 1)
+       for value-object-loc = (elt k/v-quad 3)
+       for key-object = (read-from-location key-type key-object-loc)
+       do
+         (setf (gethash key-object (untracked-key-value-loc-hash store))
+               value-object-loc))))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -389,148 +514,206 @@ on LOOM-STORE's server."
     (%read-loom-store-classes store)
     (%read-loom-store-untracked-objects store)))
 
-;;; ----------------------------------------------------------------------------
-
-(defun loom-class-node-p (list)
-  (loom-linked-node-p list 'loom-class))
-
-;;; ----------------------------------------------------------------------------
-
-(defun loom-linked-node-p (list class-name)
-  (and (listp list)
-       (let ((links (car list)))
-         (and (listp links)
-              (eq (car links) class-name)
-              (listp (cdr links))
-              (typep (cadr links) '(or null loom-loc))
-              (typep (cddr links) '(or null loom-loc))))))
-
-;;; ----------------------------------------------------------------------------
-;;; Read table stuff -- deprecated
-;;; ----------------------------------------------------------------------------
-
-(defparameter *loom-store-readtable*
-  (let ((rt (copy-readtable)))
-    (set-dispatch-macro-character #\# #\G 'loom-store-g-dispatch rt)
-    rt))
-
-(defun loom-store-g-dispatch (stream char n)
-  (declare (ignore char n))
-  (let ((char (read-char stream)))
-    (loom-store-reader-dispatch stream char)))
-
-(defmacro with-loom-store-reader (() &body body)
-  (let ((thunk (gensym "THUNK")))
-    `(flet ((,thunk () ,@body))
-       (declare (dynamic-extent #',thunk))
-       (call-with-loom-store-reader #',thunk))))
-
-(defparameter *loom-package* (find-package :loom))
-
-;; Override (package-of loom-store) during initialization
-(defvar *loom-reader-package* nil)
-
-(defun call-with-loom-store-reader (thunk)
-  (with-standard-io-syntax
-    (let ((*package* (or *loom-reader-package*
-                         (package-of *loom-store*)))
-          (*read-eval* nil)
-          (*readtable* *loom-store-readtable*))
-      (funcall thunk))))
-
-
-
-(defun map-linked-nodes (function node-loc class-name)
-  (loop for nl = node-loc then (cddr links)
-     for node = (if nl
-                    (loom-store-get nl)
-                    (return))
-     for links = (progn (assert (loom-linked-node-p node class-name))
-                        (car node))
-     do
-       (mapc function (cdr node))))
-
-(defmacro do-linked-nodes ((loc-var node-loc class-name) &body body)
-  (let ((thunk (gensym "THUNK")))
-    `(flet ((,thunk (,loc-var) ,@body))
-       (declare (dynamic-extent #',thunk))
-       (map-linked-nodes #',thunk ,node-loc ,class-name))))
-
-(defparameter *max-linked-node-length* 100)
-
-(defun add-to-linked-node (store node-loc)
-  (let ((node (loom-store-get node-loc))
-        (usage-loc (usage-loc-of store)))
-    (when (> (length node) *max-linked-node-length*)
-      (setf (cadar node) node-loc)
-      (let ((new-loc (random-vacant-archive-loc)))
-        (archive-buy new-loc usage-loc)
-        (archive-write new-loc node usage-loc)
-        (setf node `((,(caar node) nil . ,new-loc)))))
-    (let ((new-loc (random-vacant-archive-loc)))
-      (archive-buy new-loc usage-loc)
-      (push new-loc (cdr node))
-      (setf (loom-store-get node-loc usage-loc) node)
-      new-loc)))
-
-(defmacro instantiating-class ((instance-var class loc) &body body)
-  (let ((thunk (gensym "THUNK")))
-    `(flet ((,thunk (,instance-var) ,@body))
-       (declare (dynamic-extent #',thunk))
-       (call-instantiating-class #',thunk ,class ,loc))))
-
-(defun call-instantiating-class (thunk class loc)
-  (unless (typep class 'class)
-    (setf class (find-class class)))
-  (let ((store *loom-store*)
-        (instance (allocate-instance class))
-        (done nil))
-    (setf (gethash instance (instance-to-loc-hash-of store)) loc
-          (gethash loc (loc-to-instance-hash-of store)) instance)
-    (unwind-protect
-         (multiple-value-prog1
-             (funcall thunk instance)
-           (setf done t))
-      (unless done
-        (remhash instance (instance-to-loc-hash-of store))
-        (remhash loc (loc-to-instance-hash-of store))))))
-
-(defvar *instantiating-instance* nil)
-
-
 ;;;
-;;; Reader dispatching
+;;; Manipulators
 ;;;
 
-(defmethod loom-store-reader-dispatch (stream (char (eql #\R)))
-  (check-type *loom-store* loom-store)
-  (destructuring-bind (class loc) (read stream)
-    (let ((res (or (gethash loc (loc-to-instance-hash-of *loom-store*))
-                   (instantiating-class (*instantiating-instance* class loc)
-                     (read-from-string (archive-touch loc))))))
-      (assert (typep res class))
-      res)))
+(defparameter *max-linked-node-length* 4
+  "Defines the maximum length of a linked node.")
 
-(defparameter *unbound-marker* '--unbound--)
+(defparameter *minimum-linked-node-fill* .75
+  "A number ∈ (0.0 1.0], that defines the smallest allowed capacity for a
+linked node that is not the last.")
 
-(defmethod loom-store-reader-dispatch (stream (char (eql #\I)))
-  (destructuring-bind (class-name . slot-values) (read stream)
-    (let* ((store *loom-store*)
-           (class-hash (class-hash-of store))
-           (loom-class (or (gethash class-name class-hash)
-                           (error "There is no loom class named ~s"
-                                  class-name)))
-           (slots (slots-of loom-class))
-           (instance *instantiating-instance*))
-      (assert (eq (type-of instance) class-name))
-      (loop for slot in slots
-         for value in slot-values
-         when (and slot (not (eq value *unbound-marker*)))
-         ;; should catch errors here and remove offending slots
-         do (setf (slot-value instance slot) value))
-      (shared-initialize instance t)
-      instance)))
-    
+;;; ----------------------------------------------------------------------------
+
+(defun %append-new-nodes (node objects)
+  "Append new linked nodes to hold objects."
+  (let ((insert-size (length objects))
+        location first-location)
+    (loop
+       while (plusp insert-size)
+       for use = (min *max-linked-node-length* insert-size)
+       for nval = (linked-node-create node (subseq objects 0 use))
+       do
+         (decf insert-size use)
+         (setf objects (subseq objects use))
+         (multiple-value-bind (nval nloc)
+             (setf (loom-store-get) nval)
+           (unless first-location
+             (setf first-location nloc))
+           (when (and node location)
+             (setf (linked-node-next node) nloc
+                   (loom-store-get location) node))
+           (setf node nval
+                 location nloc)))
+    ;; return the first allocated location
+    ;; this is necessary for starting a new linked node list
+    first-location))
+
+;;; ----------------------------------------------------------------------------
+
+(defun %insert-into-old-nodes (location objects)
+  "Insert objects into empty spaces within the linked node list at location.
+Returns the last seen node, location, and the remaining objects."
+  (let ((insert-size (length objects))
+        last-node last-location)
+    (block insert-into
+      (map-linked-nodes
+       (lambda (location node)
+         (let* ((node-elements (linked-node-elements node))
+                (use (min insert-size
+                          (- *max-linked-node-length*
+                             (length node-elements)))))
+           (setf last-node node
+                 last-location location)
+           (when (plusp use)
+             (decf insert-size use)
+             (setf (linked-node-elements node)
+                   (append node-elements (subseq objects 0 use))
+                   objects (subseq objects use)
+                   (loom-store-get location) node)))
+         ;; if all of our inserts are done, return
+         (when (zerop insert-size)
+           (return-from %insert-into-old-nodes 
+             (values nil nil nil))))
+       location))
+    (values last-node last-location objects)))
+
+;;; ----------------------------------------------------------------------------
+
+(defun add-to-linked-node (objects location)
+  "Inserts the object[s] into the linked nodes, specializing on the node type.
+When location is nil, returns the location of a new linked node list holding
+objects."
+  (multiple-value-bind (last-node last-location objects)
+      (%insert-into-old-nodes location objects)
+    (when (and last-node objects)
+      (setf (linked-node-next last-node)
+            (%append-new-nodes last-node objects))
+      (setf (loom-store-get last-location) last-node))
+    location))
+               
+;;; ----------------------------------------------------------------------------
+
+(defun %linked-node-repack (triples &optional force)
+  (labels ((lnm-loc (x) (car x))
+           (lnm-node (x) (cadr x))
+           (lnm-mod (x) (caddr x))
+           (repack-needed? (lnm)
+             (loop for el in lnm
+                do (when (and (linked-node-next (lnm-node el))
+                              (< (/ (length (linked-node-elements
+                                             (lnm-node el)))
+                                    *max-linked-node-length*)
+                                 *minimum-linked-node-fill*))
+                     (return-from repack-needed? t)))
+             nil)
+           (chunk (list chunk)
+             (let ((pos 0) (len (length list))
+                   col)
+               (loop while (< pos len)
+                  for use = (min chunk (- len pos))
+                  do
+                    (push (subseq list pos (+ pos use)) col)
+                    (incf pos use))
+               (nreverse col))))
+    (cond ((or force (repack-needed? triples))
+           (let* ((locations (nreverse (mapcar #'lnm-loc triples)))
+                  (nodes (nconc (mapcar #'lnm-node triples)
+                                (let (col) (map-linked-nodes
+                                            (lambda (location node)
+                                              (push location locations)
+                                              (push node col))
+                                            (linked-node-next
+                                             (lnm-node (lastcar triples))))
+                                     (nreverse col))))
+                  (elements (mapcan #'linked-node-elements nodes))
+                  (chunks (chunk elements *max-linked-node-length*)))
+             (setf locations (nreverse locations))
+             (mapc (lambda (location)
+                     (loom-store-sell location))
+                   (subseq locations (length chunks)))
+             (mapcar ;; collect location/node/modified triples
+              (lambda (location node)
+                (list location node t))
+              locations
+              (mapcar ;; collect packed nodes
+               (lambda (location node chunk)
+                 (setf (linked-node-elements node) chunk
+                       (linked-node-next node) location)
+                 node)
+               (nconc (cdr (subseq locations 0 (length chunks)))
+                      (list nil))
+               nodes chunks))))
+          (t triples))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun %linked-node-commit (loc/node/mod-triples)
+  (mapc (lambda (x)
+          (let ((location (car x))
+                (node (cadr x))
+                (modified (caddr x)))
+            (when modified
+              (setf (loom-store-get location) node))))
+        loc/node/mod-triples))
+
+;;; ----------------------------------------------------------------------------
+
+(defun remove-from-linked-node (predicate location
+                                &key count)
+  "Remove elements from the linked nodes at location where predicate evaluates
+to t when called on the element. If count is a number, terminate after the first
+count deletions. Nodes before the last node are guaranteed to have "
+  (let ((deleted-elements nil)
+        (deletions 0)
+        (loc/node/modified-triples nil))
+    (block deletion-section
+      (map-linked-nodes
+       (lambda (location node)
+         (let (kept-elements del)
+           (mapc (lambda (el)
+                   (cond ((and (or (not count) (< deletions count))
+                               (funcall predicate el))
+                          (setf del t)
+                          (push el deleted-elements)
+                          (incf deletions))
+                         (t (push el kept-elements))))
+                 (linked-node-elements node))
+           (setf (linked-node-elements node) (nreverse kept-elements))
+           (push (list location node del) loc/node/modified-triples))
+         (when (and count (= deletions count))
+           (return-from deletion-section nil)))
+       location))
+    (let ((triples (nreverse loc/node/modified-triples)))
+      (%linked-node-commit
+       (%linked-node-repack triples))
+      (values deleted-elements triples))))
+
+;;; ============================================================================
+;;; 
+;;; Persistant Object Definition
+;;; 
+;;; ============================================================================
+
+;;;
+;;; Meta-object protocol specialization
+;;;
+
+(defmethod validate-superclass ((a loom-persist) (b standard-class))
+  t)
+
+;;; ----------------------------------------------------------------------------
+
+;(defmethod finalize-inheritance :after ((class loom-persist))
+;  (let ((
+
+;;; ----------------------------------------------------------------------------
+
+;(defmethod ensure-class-using-class (
+
+
 ;;; ============================================================================
 ;;; 
 ;;; Loom store reader/writer methods
@@ -554,6 +737,7 @@ on LOOM-STORE's server."
 ;;; ----------------------------------------------------------------------------
 
 (defmethod read-from-location (type location)
+  (declare (ignore type location))
   nil)
 
 ;;;
@@ -579,9 +763,6 @@ on LOOM-STORE's server."
   (error "Cannot write: unknown type ~A [~A]" (type-of object) object))
 
 ;;; ----------------------------------------------------------------------------
-
-(defmethod write-to-stream (object stream)
-  (prin1 object stream))
 
 ;; Eventually, handle circular lists here
 (defmethod write-to-loom-store ((object cons) stream)
@@ -628,6 +809,7 @@ on LOOM-STORE's server."
     (write-char #\) stream)
     object))
 
+#+no
 (defun loom-persist-standard-object (object &optional
                                      (loom-store *loom-store*))
   "Write OBJECT to LOOM-STORE.
@@ -639,10 +821,12 @@ Returns OBJECT."
   (with-loom-store (loom-store)
     (%loom-persist-standard-object loom-store object nil)))
 
+#+no
 (defun %loom-persist-class (store class)
   (unless (gethash (class-name class) (class-hash-of store))
-    (let 
+    (let )))
 
+#+no
 (defun %loom-persist-standard-object (store object not-present-p)
   (let* ((class-name (class-name (class-of object)))
          (class-hash (class-hash-of store))
@@ -701,6 +885,7 @@ Returns OBJECT."
           (remhash object (instance-to-loc-hash-of store))))))
   object)
 
+#+no
 (defun loom-instance-persisted-slots (instance)
   (let* ((class (class-of instance))
          (omitted-slots (loom-instance-omitted-slots instance)))
@@ -711,6 +896,7 @@ Returns OBJECT."
        collect slot-name)))
 
 ;; Specialize this to omit slots form your classes
+#+no
 (defgeneric loom-instance-omitted-slots (instance)
   (:method ((instance t))
     nil)
@@ -718,6 +904,7 @@ Returns OBJECT."
 to omit from the persistent store.
 Specializations should usually cons onto the result of (CALL-NEXT-METHOD)."))
 
+#+no
 (defun map-loom-instances-of-class (function class-or-name &optional
                                     (loom-store *loom-store*))
   "Call function repeatedly, with a single argument, each instance
@@ -741,6 +928,7 @@ of CLASS-OR-NAME that is in LOOM-STORE."
                        (loom-store-get loc)))))
             (funcall function instance)))))))
 
+#+no
 (defmacro do-loom-instances-of-class ((instance-var class-or-name &optional
                                                     loom-store)
                                       &body body)
@@ -752,6 +940,7 @@ of CLASS-OR-NAME in LOOM-STORE."
        (map-loom-instances-of-class #',thunk ,class-or-name
                                     ,@(and loom-store (list loom-store))))))
 
+#+no
 (defun loom-instances-of-class (class-or-name &optional
                                 (loom-store *loom-store*))
   "Returns a list of all instances of CLASS-OR-NAME in LOOM-STORE."
@@ -760,6 +949,7 @@ of CLASS-OR-NAME in LOOM-STORE."
       (push instance res))
     (nreverse res)))
 
+#+no
 (defun wallet-loom-store (location name &key is-passphrase-p usage package)
   "Read or create a loom-store with location of NAME in the wallet
 at LOCATION. If IS-PASSPHRASE-P is true, LOCATION is a passphrase.
@@ -783,19 +973,6 @@ Returns a LOOM-STORE instance."
                  (setf (get-wallet location nil (or usage location))
                        wallet)
                  store))))))
-
-;;; ============================================================================
-;;; Persistant Object Definition
-;;; ============================================================================
-
-
-(defmethod validate-superclass ((a loom-persist) (b standard-class))
-  t)
-
-(defmethod finalize-inheritance :after ((class loom-persist))
-  (let ((
-
-;(defmethod ensure-class-using-class (
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
