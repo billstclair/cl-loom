@@ -105,46 +105,26 @@ themselves be persisted to the current *loom-store*."))
     :accessor package-of
     :type package)
    (untracked-key-value-loc-hash
-    :initform (make-hash-table :test 'equalp)
+    :initform (make-hash-table :test 'equal)
     :accessor untracked-key-value-loc-hash
-    :documentation "untracked object key -> value loc")
-   (id-to-location-hash
-    :initform (make-hash-table :test 'eql)
+    :documentation "untracked object key -> (value-type value-loc)")
+   (class/id->location
+    :initform (make-hash-table :test 'equal)
     :accessor id-to-location-hash-of
     :documentation "id -> location")
-   (location-to-id-hash
+   (location->class/id
     :initform (make-hash-table :test 'equal)
     :accessor location-to-id-hash-of
     :documentation "location -> id")
-   (loc-to-instance-hash
-    :initform (make-hash-table :test 'equal)
-    :accessor loc-to-instance-hash-of
-    :documentation "location -> instance")
-   (instance-to-loc-hash
-    :initform (make-hash-table :test 'equal)
-    :accessor instance-to-loc-hash-of
-    :documentation "instance -> location")
+   (instances
+    :initform (make-hash-table :test 'eq)
+    :accessor instances-of
+    :documentation "instance -> t")
    (class-hash
     :initform (make-hash-table :test 'eq)
     :accessor class-hash-of
     :documentation "class-name -> class metaobject")
    ))
-
-;;; 
-;;; loom-class methods
-;;; 
-
-(defmethod print-object ((class loom-class) stream)
-  (print-unreadable-object (class stream :type t)
-    (prin1 (class-name-of class))))
-
- ;;; ----------------------------------------------------------------------------
-
-(defun make-loom-class (class-name slots &optional instances-loc)
-  (make-instance 'loom-class
-                 :class-name class-name
-                 :slots slots
-                 :instances-loc instances-loc))
 
 ;;; 
 ;;; loom-store methods
@@ -518,12 +498,20 @@ on LOOM-STORE's server."
 ;;; Manipulators
 ;;;
 
-(defparameter *max-linked-node-length* 4
+(defparameter *max-linked-node-length* 100
   "Defines the maximum length of a linked node.")
 
 (defparameter *minimum-linked-node-fill* .75
   "A number ∈ (0.0 1.0], that defines the smallest allowed capacity for a
 linked node that is not the last.")
+
+;;; ----------------------------------------------------------------------------
+
+(defun find-in-linked-node (location object
+                            &optional (test #'eql) (key #'identity))
+  (let ((objects (mapcan #'linked-node-elements
+                         (collect-linked-nodes location))))
+    (find object objects :test test :key key)))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -633,7 +621,7 @@ objects."
              (setf locations (nreverse locations))
              (mapc (lambda (location)
                      (loom-store-sell location))
-                   (subseq locations (length chunks)))
+                   (subseq (cdr locations) (max 0 (1- (length chunks)))))
              (mapcar ;; collect location/node/modified triples
               (lambda (location node)
                 (list location node t))
@@ -645,7 +633,7 @@ objects."
                  node)
                (nconc (cdr (subseq locations 0 (length chunks)))
                       (list nil))
-               nodes chunks))))
+               nodes (or chunks '(nil))))))
           (t triples))))
 
 ;;; ----------------------------------------------------------------------------
@@ -665,7 +653,8 @@ objects."
                                 &key count)
   "Remove elements from the linked nodes at location where predicate evaluates
 to t when called on the element. If count is a number, terminate after the first
-count deletions. Nodes before the last node are guaranteed to have "
+count deletions. Nodes before the last node are guaranteed to have ≥ to
+(* *minimum-linked-node-fill* *max-linked-node-length*) elements."
   (let ((deleted-elements nil)
         (deletions 0)
         (loc/node/modified-triples nil))
@@ -686,9 +675,9 @@ count deletions. Nodes before the last node are guaranteed to have "
          (when (and count (= deletions count))
            (return-from deletion-section nil)))
        location))
-    (let ((triples (nreverse loc/node/modified-triples)))
-      (%linked-node-commit
-       (%linked-node-repack triples))
+    (let* ((triples (nreverse loc/node/modified-triples))
+           (repack (%linked-node-repack triples)))
+      (%linked-node-commit repack)
       (values deleted-elements triples))))
 
 ;;; ============================================================================
@@ -704,6 +693,29 @@ count deletions. Nodes before the last node are guaranteed to have "
 (defmethod validate-superclass ((a loom-persist) (b standard-class))
   t)
 
+;;; ----------------------------------------------------------------------------
+
+;; This redefines #'slot-value to use the correct MOP compatible accessor
+
+#.(let ((defun `((defun slot-value (object slot-name)
+                   (let ((class (class-of object)))
+                     (slot-value-using-class
+                      class object
+                      (find slot-name (class-slots class)
+                            :test #'eq :key #'slot-definition-name))))
+                 (defun (setf slot-value) (value object slot-name)
+                   (let ((class (class-of object)))
+                     (setf (slot-value-using-class
+                            class object
+                            (find slot-name (class-slots class)
+                                  :test #'eq :key #'slot-definition-name))))))))
+    (cond ((or #+ccl t)
+           `(let ((,(find-symbol "*WARN-IF-REDEFINE-KERNEL*" :ccl) nil))
+              ,@defun))
+          ((or #+sbcl t)
+           `(,(find-symbol "WITHOUT-PACKAGE-LOCKS" :sb-ext)
+                ,@defun))))
+            
 ;;; ----------------------------------------------------------------------------
 
 ;(defmethod finalize-inheritance :after ((class loom-persist))
@@ -753,7 +765,7 @@ count deletions. Nodes before the last node are guaranteed to have "
 
 (defmethod write-to-location :before (object (location (eql t)))
   (declare (ignore object))
-  (archive-buy location (usage-loc-of *loom-store*))
+  (archive-buy (random-vacant-archive-loc) (usage-loc-of *loom-store*))
   (call-next-method))
 
 ;;; ----------------------------------------------------------------------------
