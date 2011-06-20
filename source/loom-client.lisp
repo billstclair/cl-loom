@@ -172,6 +172,9 @@ the loom.cc server."
   ;; Errors provide most (but not all) key/value information to clients
   ((error-args :initarg :error-args :initform nil :reader loom-client-error-args)))
 
+(defgeneric get-loom-error-property (e keyname)
+  (:documentation ""))
+
 (defmethod get-loom-error-property ((e loom-client-error) keyname)
   (cdr (find (downcase-princ-to-string keyname) (loom-client-error-args e)
              :key #'car :test #'equal)))

@@ -24,6 +24,7 @@
   ;; Shadow conflicting closer-mop symbols before :use
   #.(nconc '(:shadowing-import-from closer-mop)
            (conflicting-symbols-between :cl :closer-mop))
+  (:shadowing-import-from alexandria lastcar)
   (:import-from cl-user conflicting-symbols-between)
 
   (:export #:c-escape

@@ -708,7 +708,8 @@ count deletions. Nodes before the last node are guaranteed to have ≥ to
                      (setf (slot-value-using-class
                             class object
                             (find slot-name (class-slots class)
-                                  :test #'eq :key #'slot-definition-name))))))))
+                                  :test #'eq :key #'slot-definition-name))
+                           value))))))
     (cond ((or #+ccl t)
            `(let ((,(find-symbol "*WARN-IF-REDEFINE-KERNEL*" :ccl) nil))
               ,@defun))
@@ -716,6 +717,29 @@ count deletions. Nodes before the last node are guaranteed to have ≥ to
            `(,(find-symbol "WITHOUT-PACKAGE-LOCKS" :sb-ext)
                 ,@defun))))
             
+;;; ----------------------------------------------------------------------------
+
+(defun ensure-loom-class (class)
+  (assert (typep class 'loom-persist))
+  (with-loom-store (*loom-store*)
+    (let* ((name (class-name class))
+           (ch (class-hash-of *loom-store*))
+           (hash (gethash name ch)))
+      (cond (hash hash)
+            (t 
+             (setf (gethash name ch) class
+                   (loom-store-of class) *loom-store*)
+             class)))))
+                   
+#|
+(defun persist-loom-instsance (class instance)
+  (assert (and (typep instance class)
+               (typep class 'loom-persist)))
+  (
+
+(defun add-specialized-initializer-to-loom-class (class)
+  (let ((lambda (
+|#
 ;;; ----------------------------------------------------------------------------
 
 ;(defmethod finalize-inheritance :after ((class loom-persist))
@@ -759,7 +783,7 @@ count deletions. Nodes before the last node are guaranteed to have ≥ to
 (defgeneric write-to-location (object location)
   (:argument-precedence-order location object)
   (:documentation "Writes an object to the location, with updates to
-*loom-store*."))
+*loom-store*. Users should specialize on object, and return a string."))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -770,11 +794,34 @@ count deletions. Nodes before the last node are guaranteed to have ≥ to
 
 ;;; ----------------------------------------------------------------------------
 
+(defmethod write-to-location :around (object location)
+  (let ((string (call-next-method object location)))
+    (when (stringp string)
+      (with-loom-store (*loom-store*)
+        (archive-write location string (usage-loc-of *loom-store*))
+        (values location string)))))
+
+;;; ----------------------------------------------------------------------------
+
 (defmethod write-to-location (object location)
   (declare (ignore location))
   (error "Cannot write: unknown type ~A [~A]" (type-of object) object))
 
 ;;; ----------------------------------------------------------------------------
+
+(defmethod write-to-location ((obj string) location)
+  (declare (ignore location))
+  obj)
+
+(defmethod write-to-location ((obj number) location)
+  (declare (ignore location))
+  (with-output-to-string (s)
+    (prin1 obj s)))
+
+(defmethod write-to-location ((obj cons) location)
+  (declare (ignore location))
+  (with-output-to-string (s)
+    ))
 
 ;; Eventually, handle circular lists here
 (defmethod write-to-loom-store ((object cons) stream)
