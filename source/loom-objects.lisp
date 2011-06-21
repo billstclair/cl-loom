@@ -122,11 +122,11 @@ themselves be persisted to the current *loom-store*."))
    (class/id->location
     :initform (make-hash-table :test 'equal)
     :accessor class/id->location-of
-    :documentation "id -> location")
+    :documentation "(classname id) -> location")
    (location->class/id
     :initform (make-hash-table :test 'equal)
     :accessor location->class/id-of
-    :documentation "location -> id")
+    :documentation "location -> (classname id)")
    (instances
     :initform (make-hash-table :test 'eq)
     :accessor instances-of
@@ -243,6 +243,20 @@ on LOOM-STORE's server."
 Uses the values from *loom-store*"
   (with-loom-store (*loom-store*)
     (%loom-store-get loc (package-of *loom-store*))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun %instantiate-archive-location (usage &optional loc)
+  (let ((location (or (when (typep loc 'loom-loc) loc)
+                      (random-vacant-archive-loc))))
+    (archive-buy location usage)))
+
+;;; ----------------------------------------------------------------------------
+
+(defun instantiate-archive-location (&optional loc)
+  "Create a new archive location at (or loc (random-vacant-archive-loc))"
+  (with-loom-store (*loom-store*)
+    (%instantiate-archive-location (usage-loc-of *loom-store*) loc)))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -752,10 +766,58 @@ count deletions. Nodes before the last node are guaranteed to have ≥ to
   (declare (ignore location))
   obj)
 
+;;; ----------------------------------------------------------------------------
+
+(defmethod write-to-location ((obj float) location))
+
 (defmethod write-to-location ((obj number) location)
   (declare (ignore location))
   (with-output-to-string (s)
     (prin1 obj s)))
+
+;;;
+;;; Equality
+;;;
+
+(defgeneric loom-equality-test (thing1 thing2)
+  (:documentation "Tests whether objects are to be considered equal for
+persist purposes."))
+
+;;; ----------------------------------------------------------------------------
+
+(defmethod loom-equality-test (a b)
+  (equal a b))
+
+;;;
+;;; Types
+;;;
+
+(defparameter *read/write-types*
+  '(integer float ratio array cons hash-table))
+
+;;; ----------------------------------------------------------------------------
+
+(defun determine-class (object)
+  "Returns the type that object would specialize to if it was sent to
+write-to-location"
+  (let* ((gf (ensure-generic-function 'write-to-location))
+         (specialized-types (remove-duplicates
+                             (mapcar (lambda (x)
+                                       (car (method-specializers x)))
+                                     (generic-function-methods gf))
+                             :test #'eq))
+         (types (topo-sort specialized-types
+                           :key #'identity
+                           :depends
+                           (let ((hash (fill-keys-hash
+                                        'eq specialized-types)))
+                             (lambda (x)
+                               (remove-if-not
+                                (lambda (y) (gethash y hash))
+                                (class-precedence-list x)))))))
+    (loop for type in types
+       do (when (typep object type)
+            (return-from determine-class type)))))
 
 ;;; ============================================================================
 ;;; 
@@ -769,16 +831,6 @@ count deletions. Nodes before the last node are guaranteed to have ≥ to
 
 (defmethod validate-superclass ((a loom-persist) (b standard-class))
   t)
-
-;;; ----------------------------------------------------------------------------
-
-(defparameter *read/write-types*
-  '(integer float ratio array cons hash-table))
-
-(defun determine-class (object)
-  (loop for i in *read/write-types*
-     do (when (typep object i)
-          (return-from determine-class i))))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -851,11 +903,10 @@ already exist."
 
 ;;; ----------------------------------------------------------------------------
 
-(defun get-instance-id (instance)
-  (let ((class (class-of instance)))
-    (or (gethash instance (instances->ids-of class))
-        (prog1 (id-counter-of class)
-          (incf (id-counter-of class))))))
+(defun get-instance-id (class instance)
+  (or (gethash instance (instances->ids-of class))
+      (prog1 (id-counter-of class)
+        (incf (id-counter-of class)))))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -864,34 +915,63 @@ already exist."
 (defun persist-loom-instance (class instance)
   (assert (and (typep instance class)
                (typep class 'loom-persist)))
-  (let ((*without-persisting-access* t))
+  (let ((*without-persisting-access* t)
+        (class-name (class-name class)))
     (let ((slots (remove-if (lambda (x)
                               (find (slot-definition-name x)
                                     (ignored-slots-of class)
                                     :test #'eq))
                             (class-slots class)))
-          (loom-object (make-%loom-object :class (class-name class))))
+          (loom-object (make-%loom-object :class class-name)))
       (setf (%loom-object-slots loom-object)
             (loop for slot in slots collect
                  (list (slot-definition-name slot)
                        (persist-thing
                         (slot-value-using-class class instance slot)))))
-      (add-to-linked-node 
+      (let* ((id (get-instance-id class instance))
+             (location (or (gethash (list class-name id)
+                                    (location->class/id-of *loom-store*))
+                           (instantiate-archive-location))))
+        (setf (loom-store-get location) loom-object)
+        (add-to-linked-node `((,id ,location))
+                            (ensure-loom-class class))
+        location))))
 
 ;;; ----------------------------------------------------------------------------
                                           
 (defun persist-thing (thing)
+  "Persists a thing, returning the thing's location."
   (typecase (class-of thing)
     (loom-persist
-     (persist-loom-instance (class-of thing) thing))
+     (let* ((instance-hash (instances->ids-of *loom-store*))
+            (location (gethash thing instance-hash)))
+       (or location
+           (persist-loom-instance (class-of thing) thing))))
     (otherwise
-     (multiple-value-bind (location type)
-         (write-to-location thing nil)
-       (add-to-linked-node `((,type ,location))
-                           (untracked-objects-loc-of *loom-store*))
-       (setf (gethash location (location->untracked-of *loom-store*)) thing
-             (gethash thing (untracked->location-of *loom-store*)) location)
-       location))))
+     (let ((location (gethash thing (untracked->location-of thing))))
+       (cond ((typep location 'loom-loc)
+              (unless (loom-equality-test
+                       thing
+                       (read-from-location (determine-class thing)
+                                           location))
+                (write-to-location thing location))
+              location)
+             (t
+              (multiple-value-bind (location type)
+                  (write-to-location thing nil)
+                (add-to-linked-node
+                 `((,type ,location))
+                 (untracked-objects-loc-of *loom-store*))
+                (let ((luh (location->untracked-of *loom-store*))
+                      (ulh (untracked->location-of *loom-store*)))
+                  (setf (gethash location luh) thing
+                        (gethash thing ulh) location))
+                location)))))))
+    
+;;; ----------------------------------------------------------------------------
+
+(defun persist-loom-slots (class instance slots-or-t)
+  
 
 ;(defun add-specialized-initializer-to-loom-class (class)
 ;  (let ((lambda (

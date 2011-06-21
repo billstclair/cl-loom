@@ -23,6 +23,7 @@
   (define-module :cl-loom
     (:directory :cl-loom)
     (:files "package"
+            "utility"
             "c-escape"
             "loom-client"
             "loom-objects"
