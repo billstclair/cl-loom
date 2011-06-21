@@ -136,7 +136,7 @@ themselves be persisted to the current *loom-store*."))
    (class-hash
     :initform (make-hash-table :test 'eq)
     :accessor class-hash-of
-    :documentation "class-name -> class metaobject")
+    :documentation "class-object -> location")
    ))
 
 ;;; 
@@ -475,7 +475,7 @@ reader package for loom-store serialization. Binds the resulting loom-store to
        for class = (find-class class-name)
        for location = (cadr class/location-pair)
        do
-         (setf (gethash class (class-hash-of store)) class)
+         (setf (gethash class (class-hash-of store)) location)
          (%read-class-instances store class location))))
 
 ;;; ----------------------------------------------------------------------------
@@ -691,101 +691,6 @@ count deletions. Nodes before the last node are guaranteed to have ≥ to
 
 ;;; ============================================================================
 ;;; 
-;;; Persistant Object Definition
-;;; 
-;;; ============================================================================
-
-;;;
-;;; Meta-object protocol specialization
-;;;
-
-(defmethod validate-superclass ((a loom-persist) (b standard-class))
-  t)
-
-;;; ----------------------------------------------------------------------------
-
-(defun ensure-loom-class (class)
-  (assert (typep class 'loom-persist))
-  (with-loom-store (*loom-store*)
-    (let* ((name (class-name class))
-           (ch (class-hash-of *loom-store*))
-           (hash (gethash name ch)))
-      (cond (hash hash)
-            (t 
-             (setf (gethash name ch) class
-                   (loom-store-of class) *loom-store*)
-             class)))))
-
-;;; ----------------------------------------------------------------------------
-
-(predefine-fn load-loom-location)
-
-(defun load-loom-instance (class id)
-  (or (gethash id (ids->instances-of class))
-      (with-loom-store (*loom-store*)
-        (let ((location (gethash (list (class-name class) id)
-                                 (class/id->location-of *loom-store*))))
-          (when (typep location 'loom-loc)
-            (let* ((instance (allocate-instance class))
-                   (object (loom-store-get location))
-                   (stored-slots
-                    (let ((hash (make-hash-table :test 'eq)))
-                      (mapc (lambda (x)
-                              (destructuring-bind (name type location) x
-                                (setf (gethash name hash)
-                                      (list type location))))
-                            (%loom-object-slots object))
-                      hash)))
-              (shared-initialize
-               instance
-               (remove-if (lambda (slot)
-                            (gethash (slot-definition-name slot) stored-slots))
-                          (class-slots class)))
-              (let ((*without-persisting-access* t))
-                (maphash
-                 (lambda (key val)
-                   (destructuring-bind (type location) val
-                     (setf (slot-value instance key)
-                           (load-loom-location type location *loom-store*))))
-                 stored-slots))
-              instance))))))
-
-(defun load-loom-location (type location store)
-  (let ((untracked-hash (location->untracked-of store))
-        (id-hash (location->class/id-of store)))
-    (let ((untracked-cache (gethash location untracked-hash))
-          (class/id (gethash location id-hash)))
-      (cond (untracked-cache untracked-cache)
-            (class/id (load-loom-instance (find-class (car class/id))
-                                          (cadr class/id)))
-            (t
-             (let ((thing (read-from-location type location)))
-               (setf (gethash location untracked-hash) thing
-                     (gethash thing (untracked->location-of store)) location)
-               thing))))))
-
-;;; ----------------------------------------------------------------------------
-
-(defun persist-loom-instance (class instance)
-  (assert (and (typep instance class)
-               (typep class 'loom-persist))))
-  
-
-;(defun add-specialized-initializer-to-loom-class (class)
-;  (let ((lambda (
-
-;;; ----------------------------------------------------------------------------
-
-;(defmethod finalize-inheritance :after ((class loom-persist))
-;  (let ((
-
-;;; ----------------------------------------------------------------------------
-
-;(defmethod ensure-class-using-class (
-
-
-;;; ============================================================================
-;;; 
 ;;; Loom store reader/writer methods
 ;;; 
 ;;; ============================================================================
@@ -851,6 +756,156 @@ count deletions. Nodes before the last node are guaranteed to have ≥ to
   (declare (ignore location))
   (with-output-to-string (s)
     (prin1 obj s)))
+
+;;; ============================================================================
+;;; 
+;;; Persistant Object Definition
+;;; 
+;;; ============================================================================
+
+;;;
+;;; Meta-object protocol specialization
+;;;
+
+(defmethod validate-superclass ((a loom-persist) (b standard-class))
+  t)
+
+;;; ----------------------------------------------------------------------------
+
+(defparameter *read/write-types*
+  '(integer float ratio array cons hash-table))
+
+(defun determine-class (object)
+  (loop for i in *read/write-types*
+     do (when (typep object i)
+          (return-from determine-class i))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun ensure-loom-class (class)
+  "Returns the location of 'class's instance-list, creating it if it does not
+already exist."
+  (assert (typep class 'loom-persist))
+  (with-loom-store (*loom-store*)
+    (let ((loc (gethash class (class-hash-of *loom-store*))))
+      (cond ((typep loc 'loom-loc) loc)
+            (t 
+             (let ((location (setf (loom-store-get)
+                                   (make-%loom-node :type 'instance-list))))
+               (add-to-linked-node
+                `(,(class-name class) ,location)
+                (classes-loc-of *loom-store*))
+               (setf (gethash class ch) location
+                     (loom-store-of class) *loom-store*)
+               location))))))
+
+;;; ----------------------------------------------------------------------------
+
+(predefine-fn load-loom-location)
+
+(defun load-loom-instance (class id)
+  (or (gethash id (ids->instances-of class))
+      (with-loom-store (*loom-store*)
+        (let ((location (gethash (list (class-name class) id)
+                                 (class/id->location-of *loom-store*))))
+          (when (typep location 'loom-loc)
+            (let* ((instance (allocate-instance class))
+                   (object (loom-store-get location))
+                   (stored-slots
+                    (let ((hash (make-hash-table :test 'eq)))
+                      (mapc (lambda (x)
+                              (destructuring-bind (name type location) x
+                                (setf (gethash name hash)
+                                      (list type location))))
+                            (%loom-object-slots object))
+                      hash)))
+              (shared-initialize
+               instance
+               (remove-if (lambda (slot)
+                            (gethash (slot-definition-name slot) stored-slots))
+                          (class-slots class)))
+              (let ((*without-persisting-access* t))
+                (maphash
+                 (lambda (key val)
+                   (destructuring-bind (type location) val
+                     (setf (slot-value instance key)
+                           (load-loom-location type location *loom-store*))))
+                 stored-slots))
+              instance))))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun load-loom-location (type location store)
+  (let ((untracked-hash (location->untracked-of store))
+        (id-hash (location->class/id-of store)))
+    (let ((untracked-cache (gethash location untracked-hash))
+          (class/id (gethash location id-hash)))
+      (cond (untracked-cache untracked-cache)
+            (class/id (load-loom-instance (find-class (car class/id))
+                                          (cadr class/id)))
+            (t
+             (let ((thing (read-from-location type location)))
+               (setf (gethash location untracked-hash) thing
+                     (gethash thing (untracked->location-of store)) location)
+               thing))))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun get-instance-id (instance)
+  (let ((class (class-of instance)))
+    (or (gethash instance (instances->ids-of class))
+        (prog1 (id-counter-of class)
+          (incf (id-counter-of class))))))
+
+;;; ----------------------------------------------------------------------------
+
+(predefine-fn persist-thing)
+
+(defun persist-loom-instance (class instance)
+  (assert (and (typep instance class)
+               (typep class 'loom-persist)))
+  (let ((*without-persisting-access* t))
+    (let ((slots (remove-if (lambda (x)
+                              (find (slot-definition-name x)
+                                    (ignored-slots-of class)
+                                    :test #'eq))
+                            (class-slots class)))
+          (loom-object (make-%loom-object :class (class-name class))))
+      (setf (%loom-object-slots loom-object)
+            (loop for slot in slots collect
+                 (list (slot-definition-name slot)
+                       (persist-thing
+                        (slot-value-using-class class instance slot)))))
+      (add-to-linked-node 
+
+;;; ----------------------------------------------------------------------------
+                                          
+(defun persist-thing (thing)
+  (typecase (class-of thing)
+    (loom-persist
+     (persist-loom-instance (class-of thing) thing))
+    (otherwise
+     (multiple-value-bind (location type)
+         (write-to-location thing nil)
+       (add-to-linked-node `((,type ,location))
+                           (untracked-objects-loc-of *loom-store*))
+       (setf (gethash location (location->untracked-of *loom-store*)) thing
+             (gethash thing (untracked->location-of *loom-store*)) location)
+       location))))
+
+;(defun add-specialized-initializer-to-loom-class (class)
+;  (let ((lambda (
+
+;;; ----------------------------------------------------------------------------
+
+;(defmethod finalize-inheritance :after ((class loom-persist))
+;  (let ((
+
+;;; ----------------------------------------------------------------------------
+
+;(defmethod ensure-class-using-class (
+
+
 
 #+no
 (defmethod write-to-location ((obj cons) location)
