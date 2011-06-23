@@ -23,9 +23,10 @@
 (defparameter *configuration*
   (let ((path *configuration-file*))
     (with-standard-io-syntax
-      (with-open-file (str path :direction :input :if-does-not-exist nil)
-        (or (and str (read str nil nil))
-            (error (format nil "Failed to read ~s" path)))))))
+      (let ((*package* (find-package :loom)))
+        (with-open-file (str path :direction :input :if-does-not-exist nil)
+          (or (and str (read str nil nil))
+              (error (format nil "Failed to read ~s" path))))))))
 
 (defparameter *default-configuration*
   '(loom-configuration

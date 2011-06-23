@@ -49,3 +49,11 @@ depends returns a list of nodes. Does not detect cycles."
        do
          (setf (gethash key hash) t))
     hash))
+
+;;; ----------------------------------------------------------------------------
+
+(defun find-slots (class slot-names)
+  (let ((hash (fill-keys-hash 'eq slot-names)))
+    (remove-if-not (lambda (slot)
+                     (gethash (slot-definition-name slot) hash))
+                   (class-slots class))))

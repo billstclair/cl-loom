@@ -249,7 +249,8 @@ Uses the values from *loom-store*"
 (defun %instantiate-archive-location (usage &optional loc)
   (let ((location (or (when (typep loc 'loom-loc) loc)
                       (random-vacant-archive-loc))))
-    (archive-buy location usage)))
+    (archive-buy location usage)
+    location))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -422,14 +423,18 @@ reader package for loom-store serialization. Binds the resulting loom-store to
   (check-type root-location-load-path (or string pathname))
   (when (and (or (typep root-location-load-path 'string)
                  (typep root-location-load-path 'pathname))
+             (probe-file root-location-load-path)
              (eq root-loc t))
-    (setf root-loc (load-root-location root-location-load-path)))
+    (setf root-loc (load-root-location root-location-load-path))
+    (let ((root-node (%loom-store-get root-loc package)))
+      (check-type root-node %loom-root)
+      (setf usage-loc (%loom-root-usage-loc root-node))))
   (check-type root-loc (or loom-loc null))
   (let* ((package-name (package-name package))
          (usage-loc (or usage-loc
                         (error "No usage location defined")))
          (root-node
-          (or (when root-loc (loom-store-get root-loc))
+          (or (when root-loc (%loom-store-get root-loc package))
               (make-%loom-root
                :class-loc
                (nth-value 1
@@ -740,40 +745,44 @@ count deletions. Nodes before the last node are guaranteed to have ≥ to
 
 ;;; ----------------------------------------------------------------------------
 
-(defmethod write-to-location :before (object (location (eql t)))
-  (declare (ignore object))
-  (archive-buy (random-vacant-archive-loc) (usage-loc-of *loom-store*))
-  (call-next-method))
+(predefine-fn load-loom-location)
 
-;;; ----------------------------------------------------------------------------
+(defvar *loom-out* nil
+  "A stream accessible by writer methods.")
 
 (defmethod write-to-location :around (object location)
-  (let ((string (call-next-method object location)))
+  (when (eq location t)
+    (setf location (random-vacant-archive-loc))
+    (archive-buy location
+                 (usage-loc-of *loom-store*)))
+  (let ((string (block inside-writer
+                  (with-output-to-string (*loom-out*)
+                    (let ((returned
+                           (with-standard-io-syntax
+                             (let ((*package* (package-of *loom-store*)))
+                               (call-next-method object location)))))
+                      (when (stringp returned)
+                        (return-from inside-writer returned)))))))
     (when (stringp string)
       (with-loom-store (*loom-store*)
         (archive-write location string (usage-loc-of *loom-store*))
-        (values location string)))))
+        (values location (determine-class object))))))
+
+;;; ----------------------------------------------------------------------------
+
+(defmacro define-standard-writers (types)
+  `(progn ,@(loop for type in (eval types) collect
+                 `(defmethod write-to-location ((object ,type) location)
+                    (declare (ignore location))
+                    (prin1 object *loom-out*)))))
+
+(define-standard-writers '(number symbol string))
 
 ;;; ----------------------------------------------------------------------------
 
 (defmethod write-to-location (object location)
   (declare (ignore location))
   (error "Cannot write: unknown type ~A [~A]" (type-of object) object))
-
-;;; ----------------------------------------------------------------------------
-
-(defmethod write-to-location ((obj string) location)
-  (declare (ignore location))
-  obj)
-
-;;; ----------------------------------------------------------------------------
-
-(defmethod write-to-location ((obj float) location))
-
-(defmethod write-to-location ((obj number) location)
-  (declare (ignore location))
-  (with-output-to-string (s)
-    (prin1 obj s)))
 
 ;;;
 ;;; Equality
@@ -833,19 +842,21 @@ write-to-location"
   t)
 
 ;;; ----------------------------------------------------------------------------
-
 (defun ensure-loom-class (class)
   "Returns the location of 'class's instance-list, creating it if it does not
 already exist."
   (assert (typep class 'loom-persist))
   (with-loom-store (*loom-store*)
-    (let ((loc (gethash class (class-hash-of *loom-store*))))
+    (let* ((ch (class-hash-of *loom-store*))
+           (loc (gethash class ch)))
       (cond ((typep loc 'loom-loc) loc)
             (t 
-             (let ((location (setf (loom-store-get)
-                                   (make-%loom-node :type 'instance-list))))
+             (let ((location
+                    (nth-value 1
+                               (setf (loom-store-get)
+                                     (make-%loom-node :type 'instance-list)))))
                (add-to-linked-node
-                `(,(class-name class) ,location)
+                `((,(class-name class) ,location))
                 (classes-loc-of *loom-store*))
                (setf (gethash class ch) location
                      (loom-store-of class) *loom-store*)
@@ -856,6 +867,8 @@ already exist."
 (predefine-fn load-loom-location)
 
 (defun load-loom-instance (class id)
+  "A memoized function to return the instance associated with a class/id pair.
+Calls load-loom-location for slot locations."
   (or (gethash id (ids->instances-of class))
       (with-loom-store (*loom-store*)
         (let ((location (gethash (list (class-name class) id)
@@ -883,6 +896,9 @@ already exist."
                      (setf (slot-value instance key)
                            (load-loom-location type location *loom-store*))))
                  stored-slots))
+              ;; Set weak links
+              (setf (gethash id (ids->instances-of class)) instance
+                    (gethash instance (instances->ids-of class)) id)
               instance))))))
 
 ;;; ----------------------------------------------------------------------------
@@ -893,8 +909,10 @@ already exist."
     (let ((untracked-cache (gethash location untracked-hash))
           (class/id (gethash location id-hash)))
       (cond (untracked-cache untracked-cache)
-            (class/id (load-loom-instance (find-class (car class/id))
-                                          (cadr class/id)))
+            ((typep (find-class type) 'loom-persist)
+             (assert (eq (car class/id) type))
+             (load-loom-instance (find-class type)
+                                 (cadr class/id)))
             (t
              (let ((thing (read-from-location type location)))
                (setf (gethash location untracked-hash) thing
@@ -910,68 +928,167 @@ already exist."
 
 ;;; ----------------------------------------------------------------------------
 
-(predefine-fn persist-thing)
+(defun class-persisted-slots (class)
+  (remove-if (lambda (x)
+               (find (slot-definition-name x)
+                     (ignored-slots-of class)
+                     :test #'eq))
+             (class-slots class)))
 
-(defun persist-loom-instance (class instance)
+;;; ----------------------------------------------------------------------------
+
+(predefine-fn persist-thing)
+(predefine-fn persist-loom-slots)
+
+(defun initially-persist-loom-instance (class instance)
   (assert (and (typep instance class)
                (typep class 'loom-persist)))
   (let ((*without-persisting-access* t)
         (class-name (class-name class)))
-    (let ((slots (remove-if (lambda (x)
-                              (find (slot-definition-name x)
-                                    (ignored-slots-of class)
-                                    :test #'eq))
-                            (class-slots class)))
+    (let ((slots (class-persisted-slots class))
           (loom-object (make-%loom-object :class class-name)))
       (setf (%loom-object-slots loom-object)
-            (loop for slot in slots collect
+            (loop
+               for slot in slots
+               for slot-value = (slot-value-using-class class instance slot)
+               collect
                  (list (slot-definition-name slot)
-                       (persist-thing
-                        (slot-value-using-class class instance slot)))))
+                       (if (typep (class-of slot-value) 'loom-persist)
+                           (class-name (class-of slot-value))
+                           (class-name (determine-class slot-value)))
+                       (persist-thing slot-value))))
       (let* ((id (get-instance-id class instance))
              (location (or (gethash (list class-name id)
                                     (location->class/id-of *loom-store*))
-                           (instantiate-archive-location))))
+                           (instantiate-archive-location)))
+             (class/id `(,class-name ,id)))
         (setf (loom-store-get location) loom-object)
         (add-to-linked-node `((,id ,location))
                             (ensure-loom-class class))
+        (setf (gethash id (ids->instances-of class)) instance
+              (gethash instance (instances->ids-of class)) id
+              (gethash instance (instances-of *loom-store*)) instance)
+        (setf (gethash class/id (class/id->location-of *loom-store*))
+              location
+              (gethash location (location->class/id-of *loom-store*))
+              class/id)
         location))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun %commit-loom-slot-changes
+    (location loom-object new-slots)
+  (let* ((hash (fill-keys-hash 'eq (mapcar #'car new-slots)))
+         (old-slots (remove-if (lambda (x)
+                                 (gethash (car x) hash))
+                               (%loom-object-slots loom-object))))
+    (setf (%loom-object-slots loom-object)
+          (nconc new-slots old-slots))
+    (setf (loom-store-get location) loom-object)))
+
+;;; ----------------------------------------------------------------------------
+
+(defun %persist-loom-slots-of-loom-persist
+    (slot value current-def)
+  (let* ((class (class-of value))
+         (id (gethash value (instances->ids-of class)))
+         (c/id `(,(class-name class) ,id))
+         (slot-location
+          (gethash c/id (class/id->location-of *loom-store*)))
+         (current-type (elt current-def 1))
+         (current-loc (elt current-def 2)))
+    (unless (and (eq (class-name class) current-type)
+                 (string= current-loc slot-location))
+      (list (slot-definition-name slot)
+            (class-name class)
+            current-loc))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun %persist-loom-slots-of-untracked
+    (slot value current-def)
+  (let ((slot-location
+         (gethash value (untracked->location-of *loom-store*)))
+        (current-location (elt current-def 2))
+        (type (determine-class value)))
+    (unless (and 
+             (eq type (elt current-def 1))
+             slot-location (string= slot-location current-location))
+      (list slot type
+                  (or slot-location
+                      (persist-thing value))))))
+  
+;;; ----------------------------------------------------------------------------
+
+(defun %persist-loom-slots (class instance loom-object slots-or-t)
+  "Takes a class, instance, %loom-object, and slot names list. Persists new
+untracked objects and links loom-objects."
+  (let ((*without-persisting-access* t)
+        (slots (if (eq slots-or-t t)
+                   (class-persisted-slots class)
+                   (find-slots class slots-or-t)))
+        (location (gethash `(,(class-name class)
+                             ,(gethash instance (instances->ids-of class)))
+                           (class/id->location-of *loom-store*))))
+    (%commit-loom-slot-changes
+     location loom-object
+     (mapcan
+      (lambda (slot)
+        (let ((value (slot-value-using-class
+                      class instance slot))
+              (def (find (slot-definition-name slot)
+                         (%loom-object-slots loom-object)
+                         :key #'car :test #'eq)))
+          (typecase (class-of value)
+            (loom-persist (%persist-loom-slots-of-loom-persist
+                           slot value def))
+            (otherwise (%persist-loom-slots-of-untracked
+                        slot value def)))))
+      slots))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun persist-loom-slots (class instance slots-or-t)
+  (let* ((id (gethash instance (instances->ids-of class)))
+         (loc (gethash `(,(class-name class) ,id)
+                       (class/id->location-of *loom-store*)))
+         (loom-object (loom-store-get loc)))
+    (%persist-loom-slots class instance loom-object slots-or-t)))
 
 ;;; ----------------------------------------------------------------------------
                                           
 (defun persist-thing (thing)
   "Persists a thing, returning the thing's location."
-  (typecase (class-of thing)
-    (loom-persist
-     (let* ((instance-hash (instances->ids-of *loom-store*))
-            (location (gethash thing instance-hash)))
-       (or location
-           (persist-loom-instance (class-of thing) thing))))
-    (otherwise
-     (let ((location (gethash thing (untracked->location-of thing))))
-       (cond ((typep location 'loom-loc)
-              (unless (loom-equality-test
-                       thing
-                       (read-from-location (determine-class thing)
-                                           location))
-                (write-to-location thing location))
-              location)
-             (t
-              (multiple-value-bind (location type)
-                  (write-to-location thing nil)
-                (add-to-linked-node
-                 `((,type ,location))
-                 (untracked-objects-loc-of *loom-store*))
-                (let ((luh (location->untracked-of *loom-store*))
-                      (ulh (untracked->location-of *loom-store*)))
-                  (setf (gethash location luh) thing
-                        (gethash thing ulh) location))
-                location)))))))
+  (let ((class (class-of thing)))
+    (typecase class
+      (loom-persist
+       (let* ((id (gethash thing (instances->ids-of class)))
+              (location (gethash `(,(class-name class) ,id)
+                                 (class/id->location-of *loom-store*))))
+         (or location
+             (initially-persist-loom-instance (class-of thing) thing))))
+      (otherwise
+       (let ((location (gethash thing (untracked->location-of *loom-store*))))
+         (cond ((typep location 'loom-loc)
+                (unless (loom-equality-test
+                         thing
+                         (read-from-location (determine-class thing)
+                                             location))
+                  (write-to-location thing location))
+                location)
+               (t
+                (multiple-value-bind (location type)
+                    (write-to-location thing t)
+                  (add-to-linked-node
+                   `((,(class-name type) ,location))
+                   (untracked-objects-loc-of *loom-store*))
+                  (let ((luh (location->untracked-of *loom-store*))
+                        (ulh (untracked->location-of *loom-store*)))
+                    (setf (gethash location luh) thing
+                          (gethash thing ulh) location))
+                  location))))))))
     
 ;;; ----------------------------------------------------------------------------
-
-(defun persist-loom-slots (class instance slots-or-t)
-  
 
 ;(defun add-specialized-initializer-to-loom-class (class)
 ;  (let ((lambda (
