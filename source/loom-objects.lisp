@@ -980,7 +980,8 @@ Calls load-loom-location for slot locations."
     (location loom-object new-slots)
   (let* ((hash (fill-keys-hash 'eq (mapcar #'car new-slots)))
          (old-slots (remove-if (lambda (x)
-                                 (gethash (car x) hash))
+                                 (or (not x)
+                                     (gethash (car x) hash)))
                                (%loom-object-slots loom-object))))
     (setf (%loom-object-slots loom-object)
           (nconc new-slots old-slots))
@@ -1014,9 +1015,10 @@ Calls load-loom-location for slot locations."
     (unless (and 
              (eq type (elt current-def 1))
              slot-location (string= slot-location current-location))
-      (list slot type
-                  (or slot-location
-                      (persist-thing value))))))
+      (list (slot-definition-name slot)
+            (class-name type)
+            (or slot-location
+                (persist-thing value))))))
   
 ;;; ----------------------------------------------------------------------------
 
@@ -1032,7 +1034,7 @@ untracked objects and links loom-objects."
                            (class/id->location-of *loom-store*))))
     (%commit-loom-slot-changes
      location loom-object
-     (mapcan
+     (mapcar
       (lambda (slot)
         (let ((value (slot-value-using-class
                       class instance slot))
