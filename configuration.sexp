@@ -4,6 +4,6 @@
  (path "/")
  (use-ssl nil)
  (local t)
- (base-dir #P"/home/lisp/ec/lisp/cl-loom/")
+ (base-dir #P"~/lisp/cl-loom/")
  (config-dir #P"data/conf")
  (binary-path #P"code/loom"))
