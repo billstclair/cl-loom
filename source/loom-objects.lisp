@@ -907,11 +907,6 @@ persist purposes."))
 ;;; Types
 ;;;
 
-(defparameter *read/write-types*
-  '(integer float ratio array cons hash-table))
-
-;;; ----------------------------------------------------------------------------
-
 (defun determine-class (object)
   "Returns the type that object would specialize to if it was sent to
 write-to-location"
@@ -975,7 +970,8 @@ already exist."
 
 (predefine-fn load-loom-location)
 
-(defvar *force-loom-load* nil)
+(defvar *force-loom-load* nil
+  "Bind to t to force #'load-loom-instance to reload from store.")
 
 (defun load-loom-instance (class id)
   "A memoized function to return the instance associated with a class/id pair.
@@ -1203,6 +1199,18 @@ untracked objects and links loom-objects."
                           (gethash thing ulh) location))
                   location))))))))
     
+;;; ----------------------------------------------------------------------------
+
+(defvar *id* nil)
+
+(defun map-loom-instances-of-class (fn class)
+  (when (symbolp class)
+    (setf class (find-class class)))
+  (when (typep class 'loom-persist)
+    (maphash (lambda (*id* instance)
+               (funcall fn instance))
+             (ids->instances-of class))))
+
 ;;; ----------------------------------------------------------------------------
 
 (defun remove-loom-object (thing)
