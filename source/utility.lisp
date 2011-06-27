@@ -185,12 +185,13 @@ depends returns a list of nodes. Does not detect cycles."
 
 ;;; ----------------------------------------------------------------------------
 
-(defun traverse (leaf tree &key pre post (node? #'consp))
+(defun traverse (leaf tree &key (nodes #'identity) pre post (node? #'consp))
   (unless (consp tree) (return-from traverse nil))
-  (mapcar (lambda (el)
-            (cond ((funcall node? el)
-                   (when pre (funcall pre el))
-                   (traverse leaf el :pre pre :post post)
-                   (when post (funcall post el)))
-                  (t (funcall leaf el))))
-          tree))
+  (mapc (lambda (el)
+          (if (funcall node? el)
+              (progn
+                (when pre (funcall pre el))
+                (traverse leaf el :nodes nodes :pre pre :post post :node? node?)
+                (when post (funcall post el)))
+              (funcall leaf el)))
+        (funcall nodes tree)))

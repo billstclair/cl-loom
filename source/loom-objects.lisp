@@ -837,16 +837,19 @@ depends on."))
                   (push (load-loom-location type loc) (car collect))
                   (push (list type loc) dependencies)))
               (loom-store-get location)
-              :pre (lambda (x)
-                     (declare (ignore x))
+              :nodes #'cdr
+              :pre (lambda (y)
+                     (declare (ignore y))
                      (push nil collect))
-              :post (lambda (x)
-                      (declare (ignore x))
+              :post (lambda (z)
+                      (declare (ignore z))
                       (push (nreverse (pop collect)) (car collect)))
-              :node? (lambda (x) (eq (car x) :list)))
+              :node? (lambda (m)
+                       (and (consp m) (eq (car m) :list))))
     (setf (gethash location (untracked-dependencies-of *loom-store*))
           dependencies)
-    (nreverse (car collect))))
+    (values (nreverse (car collect))
+            dependencies)))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -856,9 +859,11 @@ depends on."))
                 (let ((type (car x)) (loc (cadr x)))
                   (push (list type loc) dependencies)))
               (loom-store-get location)
-              :node? (lambda (x) (eq (car x) :list)))
+              :nodes #'cdr
+              :node? (lambda (x) (and (consp x) (eq (car x) :list))))
     (setf (gethash location (untracked-dependencies-of *loom-store*))
-          dependencies)))
+          dependencies)
+    dependencies))
 
 ;;;
 ;;; Standard readers/writers
@@ -1260,10 +1265,61 @@ untracked objects and links loom-objects."
 
 ;;; ----------------------------------------------------------------------------
 
-#+no
+(defun map-tracked-slots (fn instance)
+  (let* ((class (class-of instance))
+         (ignored (fill-keys-hash 'eq (ignored-slots-of class))))
+    (mapc (lambda (slotd)
+            (funcall fn (slot-value-using-class class instance slotd)))
+          (remove-if
+           (lambda (slotd &aux (slot-name (slot-definition-name slotd)))
+             (gethash slot-name ignored))
+           (class-slots (class-of instance))))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun get-dependencies (type location)
+  (or (gethash location (untracked-dependencies-of *loom-store*))
+      (read-location-dependencies type location)))
+
+;;; ----------------------------------------------------------------------------
+
 (defun loom-garbage-collect ()
   (with-loom-store (*loom-store*)
-    ()))
+    (let ((mark (make-hash-table :test 'equal))
+          (stack nil))
+      ;; Collect direct objects
+      (maphash
+       (lambda (class/id location)
+         (declare (ignore location))
+         (map-tracked-slots
+          (lambda (slot-value)
+            (unless (typep (class-of slot-value) 'loom-persist)
+              (let ((type (class-name (determine-class slot-value)))
+                    (loc (gethash slot-value
+                                  (untracked->location-of *loom-store*))))
+                (push (list type loc) stack))))
+          (load-loom-instance (find-class (car class/id)) (cadr class/id))))
+       (class/id->location-of *loom-store*))
+      ;; Recursive Mark
+      (flet ((mark-it (loc)
+               (prog1 (gethash loc mark)
+                 (setf (gethash loc mark) t))))
+        (loop
+           while stack
+           for current = (pop stack)
+           for type = (car current) for loc = (cadr current)
+           do
+             (unless (mark-it loc)
+               (mapc (lambda (dep) (push dep stack))
+                     (get-dependencies type loc)))))
+      ;; Sweep
+      (maphash (lambda (untracked location)
+                 (unless (gethash location mark)
+                   (remhash untracked (untracked->location-of *loom-store*))
+                   (remhash location (location->untracked-of *loom-store*))
+                   (remhash location (untracked-dependencies-of *loom-store*))
+                   (loom-store-sell location)))
+               (untracked->location-of *loom-store*)))))
 
 ;;; ----------------------------------------------------------------------------
 
