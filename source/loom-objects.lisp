@@ -386,7 +386,7 @@ Uses the values from *loom-store*"
   (merge-pathnames
    (make-pathname :name "root-location"
                   :type "sexp")
-   (module-manager:get-directory :cl-loom :up)))
+   cl-user::*cl-loom-source-file*))
 
 ;;; ----------------------------------------------------------------------------
 

@@ -36,6 +36,7 @@
            loom-server
            base-uri-of
            setup-of
+           make-configuration
            make-loom-server
 
            loom-server-setup

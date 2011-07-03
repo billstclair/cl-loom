@@ -15,12 +15,13 @@
   :version "0.5"
   :license "Apache"
   :depends-on (anaphora alexandria drakma split-sequence flexi-streams
-                        closer-mop)
+                        closer-mop trivial-garbage)
   :components
   ((:module source
     :serial t
     :components
     ((:file "package")
+     (:file "utility")
      (:file "c-escape")
      (:file "loom-client")
      (:file "loom-objects")

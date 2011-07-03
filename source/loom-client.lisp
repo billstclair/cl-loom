@@ -18,15 +18,16 @@
   (merge-pathnames
    (make-pathname :name "configuration"
                   :type "sexp")
-   (module-manager:get-directory :cl-loom :up)))
+   cl-user::*cl-loom-source-file*))
 
 (defparameter *configuration*
   (let ((path *configuration-file*))
     (with-standard-io-syntax
       (let ((*package* (find-package :loom)))
         (with-open-file (str path :direction :input :if-does-not-exist nil)
-          (or (and str (read str nil nil))
-              (error (format nil "Failed to read ~s" path))))))))
+          (and str
+               (or (read str nil nil)
+                   (error (format nil "Failed to read ~s" path)))))))))
 
 (defparameter *default-configuration*
   '(loom-configuration
@@ -41,6 +42,35 @@
   "Typically configuration is loaded from <basedir>/configuration.sexp
 This is used only when :default-setup-p t is passed to (make-instance 'server ...)
 or when no configuration.sexp file is found.")
+
+(defun loom-server-base-dir ()
+  "Return a path to the local loom server base directory"
+  (merge-pathnames
+   (make-pathname :directory '(:relative "Loom")
+                  :name :unspecific
+                  :type :unspecific)
+   cl-user::*cl-loom-source-file*))
+
+(defun make-configuration (&key
+                           (hostname "127.0.0.1")
+                           (port 8286)
+                           (path "/")
+                           (use-ssl nil)
+                           (local t)
+                           (base-dir (loom-server-base-dir))
+                           (config-dir #p"data/conf")
+                           (binary-path #p"code/loom"))
+  "Make a configuration alist suitable for passing as the CONFIG arg
+to MAKE-LOOM-SERVER. Defaults are for a local server."
+  `(loom-configuration
+    (hostname ,hostname)
+    (port ,port)
+    (path ,path)
+    (use-ssl ,use-ssl)
+    (local ,local)
+    (base-dir ,base-dir)
+    (config-dir ,config-dir)
+    (binary-path ,binary-path)))
 
 ;;; ----------------------------------------------------------------------------
 ;;; Configuration functions
