@@ -58,7 +58,7 @@ or when no configuration.sexp file is found.")
                            (use-ssl nil)
                            (local t)
                            (base-dir (loom-server-base-dir))
-                           (config-dir #p"data/conf")
+                           (config-dir #p"data/conf/")
                            (binary-path #p"code/loom"))
   "Make a configuration alist suitable for passing as the CONFIG arg
 to MAKE-LOOM-SERVER. Defaults are for a local server."
