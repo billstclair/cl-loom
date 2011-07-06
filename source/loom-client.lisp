@@ -131,6 +131,61 @@ By default, it points at loom.cc.
 Pass true for the :DEFAULT-SETUP-P initarg, and it will use the default settings
 for a local server."))
 
+;;; ----------------------------------------------------------------------------
+
+(defvar *attempting-loom-server-startup* nil)
+
+(defun attempt-loom-server-startup (&optional (initialize-p t))
+  "See https://github.com/billstclair/Loom/wiki/Config"
+  (with-server-bound (*loom-server*)
+    (assert (config-option 'local (config-of server))
+            (server)
+            "Expected server ~a to be local.~%~s"
+            server (config-of server))
+    (let* ((*configuration* (config-of server))
+           (config-dir (config-path 'config-dir))
+           (binary-pathname (config-path 'binary-path)))
+      (assert (and config-dir (pathnamep config-dir)
+                   binary-pathname (pathnamep binary-pathname))
+              (config-dir binary-pathname)
+              "Expected config-dir=~a and binary-pathname=~a to be paths"
+              config-dir binary-pathname)
+      ;; Shut down server
+      (asdf:run-shell-command "'~a' -n" binary-pathname)
+      ;; Write config files
+      (let ((config-file (merge-pathnames "sloop" config-dir)))
+        (when (or initialize-p (not (probe-file config-file)))
+          (with-open-file (s config-file
+                             :direction :output
+                             :if-exists :supersede
+                             :if-does-not-exist :create)
+            (write-string (alist-to-kv-string
+                           `(("module" . "Loom::Web::Main")
+                             ("host_port" . ,(config-option 'port))
+                             ("use_error_log" . 1)))
+                          s))))
+      (let ((loom-file (merge-pathnames "loom" config-dir)))
+        (when (or initialize-p (not (probe-file loom-file)))
+          (with-open-file (s loom-file
+                             :direction :output
+                             :if-exists :supersede
+                             :if-does-not-exist :create)
+            (write-string
+             (alist-to-kv-string '(("config_id" . "0123456789abcdef0123456789abcdef")))
+             s))))
+      ;; start server
+      (asdf:run-shell-command "'~a' -y" binary-pathname)
+      (sleep 0.5)
+      ;; Loom seems to like an initial non-transaction request
+      (let ((*attempting-loom-server-startup* t)
+            (*transaction-stream* nil))
+        (ignore-errors                  ;first transaction gets an error. Don't know why.
+          (with-loom-transaction ()
+            (sha256 "foo"))
+          nil)))))
+
+;;; ----------------------------------------------------------------------------
+
 (defmethod initialize-instance :after ((server loom-server)
                                        &key default-setup-p config
                                        &allow-other-keys)
@@ -139,7 +194,9 @@ for a local server."))
     (setf (config-of server)
           *default-configuration*))
   (setf (base-uri-of server)
-        (generate-uri (config-of server))))
+        (generate-uri (config-of server)))
+  (when (config-option 'local config)
+    (attempt-loom-server-startup t)))
 
 (defmethod print-object ((server loom-server) stream)
   (print-unreadable-object (server stream :type t)
@@ -299,68 +356,6 @@ the loom.cc server."
   "Rewrite the configuration for a local server and restart it."
   (attempt-loom-server-startup t))
 
-(defvar *attempting-loom-server-startup* nil)
-
-(defun git-submodule-init ()
-  (let* ((dir (directory-namestring cl-user::*cl-loom-source-file*)))
-    (unless (eql 0 (asdf::run-shell-command "cd '~a'; ./git-submodule-init" dir))
-      (error "Error running git-submodule-init"))))
-
-(defun ensure-loom-perl-loaded (binary-pathname)
-  (unless (probe-file binary-pathname)
-    (git-submodule-init)
-    (unless (probe-file binary-pathname)
-      (error "Can't load Loom perl code"))))
-
-;; See https://github.com/billstclair/Loom/wiki/Config
-(defun attempt-loom-server-startup (&optional (initialize-p t))
-  (with-server-bound ()
-
-    ;; Return if the server is not defined as local.
-    (unless (config-option 'local (config-of server))
-      (return-from attempt-loom-server-startup :remote-server))
-
-    (let* ((*configuration* (config-of server))
-           (config-dir (config-path 'config-dir))
-           (binary-pathname (config-path 'binary-path)))
-      (unless (and config-dir binary-pathname)
-        (error "Can't start up non-local Loom server: ~s" server))
-      (ensure-loom-perl-loaded binary-pathname)
-      ;; Shut down server
-      (asdf:run-shell-command "'~a' -n" binary-pathname)
-
-      ;; Write config files
-      (let ((config-file (merge-pathnames "sloop" config-dir)))
-        (when (or initialize-p (not (probe-file config-file)))
-          (with-open-file (s config-file
-                             :direction :output
-                             :if-exists :supersede
-                             :if-does-not-exist :create)
-            (write-string (alist-to-kv-string
-                           `(("module" . "Loom::Web::Main")
-                             ("host_port" . ,(config-option 'port))
-                             ("use_error_log" . 1)))
-                          s))))
-      (let ((loom-file (merge-pathnames "loom" config-dir)))
-        (when (or initialize-p (not (probe-file loom-file)))
-          (with-open-file (s loom-file
-                             :direction :output
-                             :if-exists :supersede
-                             :if-does-not-exist :create)
-            (write-string
-             (alist-to-kv-string '(("config_id" . "0123456789abcdef0123456789abcdef")))
-             s))))
-
-      ;; start server
-      (asdf:run-shell-command "'~a' -y" binary-pathname)
-      (sleep 0.5)
-      ;; Loom seems to like an initial non-transaction request
-      (let ((*attempting-loom-server-startup* t)
-            (*transaction-stream* nil))
-        (ignore-errors                  ;first transaction gets an error. Don't know why.
-          (with-loom-transaction ()
-            (sha256 "foo"))
-          nil)))))
 
 
 ;; URL path for Loom API HTTP GET request is currently not URL-encoded in its
