@@ -429,42 +429,42 @@ reader package for loom-store serialization. Binds the resulting loom-store to
                  (typep root-location-load-path 'pathname))
              (probe-file root-location-load-path)
              (eq root-loc t))
-    (setf root-loc (load-root-location root-location-load-path))
-    (let ((root-node (%loom-store-get root-loc package)))
-      (check-type root-node %loom-root)
-      (setf usage-loc (%loom-root-usage-loc root-node))))
+    (setf root-loc (load-root-location root-location-load-path)))
   (check-type root-loc (or loom-loc null))
-  (let* ((package-name (package-name package))
-         (usage-loc (or usage-loc
-                        (error "No usage location defined")))
-         (root-node
-          (or (when root-loc (%loom-store-get root-loc package))
-              (make-%loom-root
-               :class-loc
-               (nth-value 1
-                          (setf (%loom-store-get nil package-name usage-loc)
-                                (make-%loom-node :type 'class-list)))
-               :untracked-objects-loc
-               (nth-value 1
-                          (setf (%loom-store-get nil package-name usage-loc)
-                                (make-%loom-untracked-object)))
-               :usage-loc usage-loc
-               :package package-name))))
-    (multiple-value-bind (value loc)
-        (setf (%loom-store-get root-loc
-                               (%loom-root-package root-node)
-                               (%loom-root-usage-loc root-node))
-              root-node)
-      (declare (ignore value))
-      (when save-location (save-root-location loc root-location-load-path))
-      (make-instance 'loom-store
-                     :server server
-                     :root-loc loc
-                     :classes-loc (%loom-root-class-loc root-node)
-                     :untracked-objects-loc (%loom-root-untracked-objects-loc
-                                             root-node)
-                     :usage-loc (%loom-root-usage-loc root-node)
-                     :package (find-package (%loom-root-package root-node))))))
+  (let ((root-node nil))
+    (cond (root-loc
+           (setf root-node (%loom-store-get root-loc package))
+           (check-type root-node %loom-root))
+          (t (let* ((package-name (package-name package)))
+               (check-type usage-loc loom-loc)
+               (setf root-node
+                     (make-%loom-root
+                      :class-loc
+                      (nth-value 1
+                                 (setf (%loom-store-get nil package-name usage-loc)
+                                       (make-%loom-node :type 'class-list)))
+                      :untracked-objects-loc
+                      (nth-value 1
+                                 (setf (%loom-store-get nil package-name usage-loc)
+                                       (make-%loom-untracked-object)))
+                      :usage-loc usage-loc
+                      :package package-name)))
+             (multiple-value-bind (value loc)
+                 (setf (%loom-store-get root-loc
+                                        (%loom-root-package root-node)
+                                        (%loom-root-usage-loc root-node))
+                       root-node)
+               (declare (ignore value))
+               (setf root-loc loc))))
+    (when save-location (save-root-location root-loc root-location-load-path))
+    (make-instance 'loom-store
+                   :server server
+                   :root-loc root-loc
+                   :classes-loc (%loom-root-class-loc root-node)
+                   :untracked-objects-loc (%loom-root-untracked-objects-loc
+                                           root-node)
+                   :usage-loc (%loom-root-usage-loc root-node)
+                   :package (find-package (%loom-root-package root-node)))))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -1246,15 +1246,7 @@ untracked objects and links loom-objects."
   (declare (ignore args))
   (let* ((*without-persisting-access* t)
          (instance (call-next-method)))
-    (format t "a: ~a, b: ~a~%"
-            (if (slot-boundp instance 'a)
-                (slot-value instance 'a) '--unbound--)
-            (if (slot-boundp instance 'b)
-                (slot-value instance 'b) '--unbound--))
-    (if (and (slot-boundp instance 'a)
-             (slot-boundp instance 'b))
-        (initially-persist-loom-instance class instance)
-        (inspect instance))
+    (initially-persist-loom-instance class instance)
     instance))
 
 ;;; ----------------------------------------------------------------------------
