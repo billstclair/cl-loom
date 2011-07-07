@@ -145,10 +145,11 @@ for a local server."))
     (let* ((*configuration* (config-of server))
            (config-dir (config-path 'config-dir))
            (binary-pathname (config-path 'binary-path)))
-      (assert (and config-dir (pathnamep config-dir)
-                   binary-pathname (pathnamep binary-pathname))
+      (assert (and config-dir (pathnamep config-dir) (probe-file config-dir)
+                   binary-pathname (pathnamep binary-pathname)
+                   (probe-file binary-pathname))
               (config-dir binary-pathname)
-              "Expected config-dir=~a and binary-pathname=~a to be paths"
+              "Expected config-dir=~a and binary-pathname=~a to be valid paths"
               config-dir binary-pathname)
       ;; Shut down server
       (asdf:run-shell-command "'~a' -n" binary-pathname)
