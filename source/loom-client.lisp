@@ -109,6 +109,26 @@ to MAKE-LOOM-SERVER. Defaults are for a local server."
 
 ;;; ----------------------------------------------------------------------------
 
+;; The server for all the functions.
+;; Bind it with-loom-server or with-loom-transaction
+(defvar *loom-server* nil)
+
+#+ccl
+(ccl::define-standard-initial-binding '*loom-server*
+    (lambda () nil))
+
+(defmacro with-loom-server ((server) &body body)
+  `(let ((*loom-server* ,server))
+     (check-type *loom-server* loom-server)
+     ,@body))
+
+(defmacro with-server-bound ((&optional (server '*loom-server*)) &body body)
+  `(let ((server ,server))
+     (check-type server loom-server)
+     ,@body))
+
+;;; ----------------------------------------------------------------------------
+
 (defun generate-uri (&optional (config *configuration*))
   (format nil "~a://~a:~a~a"
           (if (config-option 'use-ssl config) "https" "http")
@@ -238,24 +258,6 @@ the loom.cc server."
               (downcase-princ-to-string (car pair))
               (downcase-princ-to-string (cdr pair))))
     (format s ")~%")))
-
-;; The server for all the functions.
-;; Bind it with-loom-server or with-loom-transaction
-(defvar *loom-server* nil)
-
-#+ccl
-(ccl::define-standard-initial-binding '*loom-server*
-    (lambda () nil))
-
-(defmacro with-loom-server ((server) &body body)
-  `(let ((*loom-server* ,server))
-     (check-type *loom-server* loom-server)
-     ,@body))
-
-(defmacro with-server-bound ((&optional (server '*loom-server*)) &body body)
-  `(let ((server ,server))
-     (check-type server loom-server)
-     ,@body))
 
 (defvar *transaction-stream* nil)
 (defparameter *transaction-retry-count* 5)
