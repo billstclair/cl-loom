@@ -8,14 +8,6 @@
 ;;;; ===========================================================================
 ;;;; ===========================================================================
 
-(defmacro predefine-fn (name)
-  `(progn (setf (fdefinition (quote ,name))
-                (lambda (&rest x)
-                  (declare (ignore x)) nil))
-          ',name))
-
-;;; ----------------------------------------------------------------------------
-
 (defun topo-sort (list &key key depends)
   "List is a list of nodes, key is hashed with eql in the visited table, and
 depends returns a list of nodes. Does not detect cycles."

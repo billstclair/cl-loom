@@ -773,8 +773,6 @@ depends on."))
 
 ;;; ----------------------------------------------------------------------------
 
-(predefine-fn load-loom-location)
-
 (defvar *loom-out* nil
   "A stream accessible by writer methods.")
 
@@ -805,8 +803,6 @@ depends on."))
 ;;;
 ;;; Reader/Writer pairs
 ;;;
-
-(predefine-fn persist-thing)
 
 (defmethod write-to-location ((object cons) location)
   (unless (tree? object)
@@ -968,8 +964,6 @@ already exist."
 
 ;;; ----------------------------------------------------------------------------
 
-(predefine-fn load-loom-location)
-
 (defvar *force-loom-load* nil
   "Bind to t to force #'load-loom-instance to reload from store.")
 
@@ -1045,9 +1039,6 @@ Calls load-loom-location for slot locations."
              (class-slots class)))
 
 ;;; ----------------------------------------------------------------------------
-
-(predefine-fn persist-thing)
-(predefine-fn persist-loom-slots)
 
 (defun initially-persist-loom-instance (class instance)
   (assert (and (typep instance class)
@@ -1246,15 +1237,7 @@ untracked objects and links loom-objects."
   (declare (ignore args))
   (let* ((*without-persisting-access* t)
          (instance (call-next-method)))
-    (format t "a: ~a, b: ~a~%"
-            (if (slot-boundp instance 'a)
-                (slot-value instance 'a) '--unbound--)
-            (if (slot-boundp instance 'b)
-                (slot-value instance 'b) '--unbound--))
-    (if (and (slot-boundp instance 'a)
-             (slot-boundp instance 'b))
-        (initially-persist-loom-instance class instance)
-        (inspect instance))
+    (initially-persist-loom-instance class instance)
     instance))
 
 ;;; ----------------------------------------------------------------------------
