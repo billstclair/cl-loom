@@ -58,7 +58,7 @@ or when no configuration.sexp file is found.")
                            (use-ssl nil)
                            (local t)
                            (base-dir (loom-server-base-dir))
-                           (config-dir #p"data/conf")
+                           (config-dir #p"data/conf/")
                            (binary-path #p"code/loom"))
   "Make a configuration alist suitable for passing as the CONFIG arg
 to MAKE-LOOM-SERVER. Defaults are for a local server."
@@ -109,6 +109,26 @@ to MAKE-LOOM-SERVER. Defaults are for a local server."
 
 ;;; ----------------------------------------------------------------------------
 
+;; The server for all the functions.
+;; Bind it with-loom-server or with-loom-transaction
+(defvar *loom-server* nil)
+
+#+ccl
+(ccl::define-standard-initial-binding '*loom-server*
+    (lambda () nil))
+
+(defmacro with-loom-server ((server) &body body)
+  `(let ((*loom-server* ,server))
+     (check-type *loom-server* loom-server)
+     ,@body))
+
+(defmacro with-server-bound ((&optional (server '*loom-server*)) &body body)
+  `(let ((server ,server))
+     (check-type server loom-server)
+     ,@body))
+
+;;; ----------------------------------------------------------------------------
+
 (defun generate-uri (&optional (config *configuration*))
   (format nil "~a://~a:~a~a"
           (if (config-option 'use-ssl config) "https" "http")
@@ -131,6 +151,8 @@ By default, it points at loom.cc.
 Pass true for the :DEFAULT-SETUP-P initarg, and it will use the default settings
 for a local server."))
 
+;;; ----------------------------------------------------------------------------
+
 (defmethod initialize-instance :after ((server loom-server)
                                        &key default-setup-p config
                                        &allow-other-keys)
@@ -139,7 +161,10 @@ for a local server."))
     (setf (config-of server)
           *default-configuration*))
   (setf (base-uri-of server)
-        (generate-uri (config-of server))))
+        (generate-uri (config-of server)))
+  (when (config-option 'local config)
+    (let ((*loom-server* server))
+      (attempt-loom-server-startup t))))
 
 (defmethod print-object ((server loom-server) stream)
   (print-unreadable-object (server stream :type t)
@@ -234,24 +259,6 @@ the loom.cc server."
               (downcase-princ-to-string (cdr pair))))
     (format s ")~%")))
 
-;; The server for all the functions.
-;; Bind it with-loom-server or with-loom-transaction
-(defvar *loom-server* nil)
-
-#+ccl
-(ccl::define-standard-initial-binding '*loom-server*
-    (lambda () nil))
-
-(defmacro with-loom-server ((server) &body body)
-  `(let ((*loom-server* ,server))
-     (check-type *loom-server* loom-server)
-     ,@body))
-
-(defmacro with-server-bound ((&optional (server '*loom-server*)) &body body)
-  `(let ((server ,server))
-     (check-type server loom-server)
-     ,@body))
-
 (defvar *transaction-stream* nil)
 (defparameter *transaction-retry-count* 5)
 
@@ -299,36 +306,28 @@ the loom.cc server."
   "Rewrite the configuration for a local server and restart it."
   (attempt-loom-server-startup t))
 
+;;; ----------------------------------------------------------------------------
+
 (defvar *attempting-loom-server-startup* nil)
 
-(defun git-submodule-init ()
-  (let* ((dir (directory-namestring cl-user::*cl-loom-source-file*)))
-    (unless (eql 0 (asdf::run-shell-command "cd '~a'; ./git-submodule-init" dir))
-      (error "Error running git-submodule-init"))))
-
-(defun ensure-loom-perl-loaded (binary-pathname)
-  (unless (probe-file binary-pathname)
-    (git-submodule-init)
-    (unless (probe-file binary-pathname)
-      (error "Can't load Loom perl code"))))
-
-;; See https://github.com/billstclair/Loom/wiki/Config
 (defun attempt-loom-server-startup (&optional (initialize-p t))
-  (with-server-bound ()
-
-    ;; Return if the server is not defined as local.
-    (unless (config-option 'local (config-of server))
-      (return-from attempt-loom-server-startup :remote-server))
-
+  "See https://github.com/billstclair/Loom/wiki/Config"
+  (with-server-bound (*loom-server*)
+    (assert (config-option 'local (config-of server))
+            (server)
+            "Expected server ~a to be local.~%~s"
+            server (config-of server))
     (let* ((*configuration* (config-of server))
            (config-dir (config-path 'config-dir))
            (binary-pathname (config-path 'binary-path)))
-      (unless (and config-dir binary-pathname)
-        (error "Can't start up non-local Loom server: ~s" server))
-      (ensure-loom-perl-loaded binary-pathname)
+      (assert (and config-dir (pathnamep config-dir) (probe-file config-dir)
+                   binary-pathname (pathnamep binary-pathname)
+                   (probe-file binary-pathname))
+              (config-dir binary-pathname)
+              "Expected config-dir=~a and binary-pathname=~a to be valid paths"
+              config-dir binary-pathname)
       ;; Shut down server
       (asdf:run-shell-command "'~a' -n" binary-pathname)
-
       ;; Write config files
       (let ((config-file (merge-pathnames "sloop" config-dir)))
         (when (or initialize-p (not (probe-file config-file)))
@@ -350,7 +349,6 @@ the loom.cc server."
             (write-string
              (alist-to-kv-string '(("config_id" . "0123456789abcdef0123456789abcdef")))
              s))))
-
       ;; start server
       (asdf:run-shell-command "'~a' -y" binary-pathname)
       (sleep 0.5)
@@ -361,7 +359,6 @@ the loom.cc server."
           (with-loom-transaction ()
             (sha256 "foo"))
           nil)))))
-
 
 ;; URL path for Loom API HTTP GET request is currently not URL-encoded in its
 ;; entirety.  Strings should be URL-encoded to protect multi-byte characters and
