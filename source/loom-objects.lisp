@@ -350,13 +350,11 @@ Uses the values from *loom-store*"
 
 (defun map-linked-nodes (fn location)
   "Maps a function of (location node) over the linked nodes."
-  (let* ((current (and (typep location 'loom-loc)
-                       (loom-store-get location)))
-         (next (and current (linked-node-next current))))
-    (when current
-      (funcall fn location current)
-      (when (typep next 'loom-loc)
-        (map-linked-nodes fn next)))))
+  (loop for loc = location then (linked-node-next current)
+     for current = (and (typep loc 'loom-loc)
+                        (loom-store-get location))
+     while current do
+       (funcall fn loc current)))
 
 ;;; ----------------------------------------------------------------------------
 
