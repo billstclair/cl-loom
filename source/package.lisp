@@ -140,6 +140,7 @@
            *root-location-file*
            save-root-location-file
            make-loom-store
+           root-loc-of
            *max-linked-node-length*
            *minimum-linked-node-fill*
            read-location-dependencies
