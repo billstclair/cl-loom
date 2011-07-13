@@ -771,8 +771,6 @@ depends on."))
 
 ;;; ----------------------------------------------------------------------------
 
-(predefine-fn load-loom-location)
-
 (defvar *loom-out* nil
   "A stream accessible by writer methods.")
 
@@ -803,8 +801,6 @@ depends on."))
 ;;;
 ;;; Reader/Writer pairs
 ;;;
-
-(predefine-fn persist-thing)
 
 (defmethod write-to-location ((object cons) location)
   (unless (tree? object)
@@ -966,8 +962,6 @@ already exist."
 
 ;;; ----------------------------------------------------------------------------
 
-(predefine-fn load-loom-location)
-
 (defvar *force-loom-load* nil
   "Bind to t to force #'load-loom-instance to reload from store.")
 
@@ -1043,9 +1037,6 @@ Calls load-loom-location for slot locations."
              (class-slots class)))
 
 ;;; ----------------------------------------------------------------------------
-
-(predefine-fn persist-thing)
-(predefine-fn persist-loom-slots)
 
 (defun initially-persist-loom-instance (class instance)
   (assert (and (typep instance class)
