@@ -141,6 +141,7 @@
            save-root-location-file
            make-loom-store
            root-loc-of
+           usage-loc-of
            *max-linked-node-length*
            *minimum-linked-node-fill*
            read-location-dependencies
@@ -156,8 +157,10 @@
            *force-loom-load*
            load-loom-instance
            persist-loom-slots
+           persist-thing
            *id*
            map-loom-instances-of-class
+           do-loom-instances-of-class
            get-instance-id
            class-persisted-slots
            remove-loom-object

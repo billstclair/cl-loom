@@ -1199,15 +1199,20 @@ untracked objects and links loom-objects."
     
 ;;; ----------------------------------------------------------------------------
 
-(defvar *id* nil)
-
 (defun map-loom-instances-of-class (fn class)
   (when (symbolp class)
     (setf class (find-class class)))
   (when (typep class 'loom-persist)
-    (maphash (lambda (*id* instance)
-               (funcall fn instance))
-             (ids->instances-of class))))
+    (dotimes (id (id-counter-of class))
+      (awhen (load-loom-instance class id)
+        (funcall fn it)))))
+
+(defmacro do-loom-instances-of-class ((instance class) &body body)
+  (let ((thunk (gensym "THUNK")))
+    `(flet ((,thunk (,instance)
+              ,@body))
+       (declare (dynamic-extent #',thunk))
+       (map-loom-instances-of-class #',thunk ,class))))
 
 ;;; ----------------------------------------------------------------------------
 
