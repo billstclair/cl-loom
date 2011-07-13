@@ -481,6 +481,8 @@ reader package for loom-store serialization. Binds the resulting loom-store to
          (setf (gethash pair (class/id->location-of store)) location
                (gethash location (location->class/id-of store)) pair
                max-id (max max-id id)))
+    (clrhash (ids->instances-of class))
+    (clrhash (instances->ids-of class))
     (setf (id-counter-of class) (1+ max-id))))
 
 ;;; ----------------------------------------------------------------------------
@@ -779,14 +781,11 @@ depends on."))
     (setf location (random-vacant-archive-loc))
     (archive-buy location
                  (usage-loc-of *loom-store*)))
-  (let ((string (block inside-writer
+  (let ((string (catch 'write-to-location-result
                   (with-output-to-string (*loom-out*)
-                    (let ((returned
-                           (with-standard-io-syntax
-                             (let ((*package* (package-of *loom-store*)))
-                               (call-next-method object location)))))
-                      (when (stringp returned)
-                        (return-from inside-writer returned)))))))
+                    (with-standard-io-syntax
+                      (let ((*package* (package-of *loom-store*)))
+                        (call-next-method object location)))))))
     (when (stringp string)
       (with-loom-store (*loom-store*)
         (archive-write location string (usage-loc-of *loom-store*))
@@ -876,13 +875,18 @@ depends on."))
   `(progn ,@(loop for type in (eval types) collect
                  `(defmethod write-to-location ((object ,type) location)
                     (declare (ignore location))
-                    (with-standard-io-syntax
-                      (let ((*package* (package-of *loom-store*)))
-                        (prin1 object *loom-out*)))))))
+                    (prin1 object *loom-out*)))))
 
-(define-standard-readers '(number symbol string))
-(define-standard-writers '(number symbol string))
+(define-standard-readers '(number symbol))
+(define-standard-writers '(number symbol))
 
+(defmethod read-from-location ((object (eql 'string)) location)
+  (declare (ignore location))
+  *loom-in-string*)
+
+(defmethod write-to-location ((object string) location)
+  (declare (ignore location))
+  (throw 'write-to-location-result object))
 
 ;;;
 ;;; Equality
