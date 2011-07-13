@@ -157,7 +157,6 @@
            *force-loom-load*
            load-loom-instance
            persist-loom-slots
-           persist-thing
            *id*
            map-loom-instances-of-class
            do-loom-instances-of-class
