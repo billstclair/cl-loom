@@ -685,7 +685,7 @@ objects."
                                 &key count)
   "Remove elements from the linked nodes at location where predicate evaluates
 to t when called on the element. If count is a number, terminate after the first
-count deletions. Nodes before the last node are guaranteed to have ≥ to
+count deletions. Nodes before the last node are guaranteed to have <= to
 (* *minimum-linked-node-fill* *max-linked-node-length*) elements."
   (let ((deleted-elements nil)
         (deletions 0)
@@ -1204,10 +1204,11 @@ untracked objects and links loom-objects."
 
 (defmacro do-loom-instances-of-class ((instance class) &body body)
   (let ((thunk (gensym "THUNK")))
-    `(flet ((,thunk (,instance)
-              ,@body))
-       (declare (dynamic-extent #',thunk))
-       (map-loom-instances-of-class #',thunk ,class))))
+    `(block nil
+       (flet ((,thunk (,instance)
+                ,@body))
+         (declare (dynamic-extent #',thunk))
+         (map-loom-instances-of-class #',thunk ,class)))))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -1218,14 +1219,6 @@ untracked objects and links loom-objects."
            (class/id `(,(class-name class) ,id))
            (location (gethash class/id
                               (class/id->location-of *loom-store*))))
-      ;; Wipe loom-store hashes of thing
-      (remhash `(,(class-name class) ,id)
-               (class/id->location-of *loom-store*))
-      (remhash location (location->class/id-of *loom-store*))
-      (remhash thing (instances-of *loom-store*))
-      ;; Wipe class hashes of thing
-      (remhash id (ids->instances-of class))
-      (remhash thing (instances->ids-of class))
       ;; Remove from loom class instance-list
       (remove-from-linked-node
        (lambda (x)
@@ -1235,6 +1228,14 @@ untracked objects and links loom-objects."
              (assert (string= location store-location))
              t)))
        (gethash class (class-hash-of *loom-store*)))
+      ;; Wipe loom-store hashes of thing
+      (remhash `(,(class-name class) ,id)
+               (class/id->location-of *loom-store*))
+      (remhash location (location->class/id-of *loom-store*))
+      (remhash thing (instances-of *loom-store*))
+      ;; Wipe class hashes of thing
+      (remhash id (ids->instances-of class))
+      (remhash thing (instances->ids-of class))
       ;; Remove instance node
       (loom-store-sell location))))
 
@@ -1313,6 +1314,16 @@ untracked objects and links loom-objects."
       ;; Sweep
       (maphash (lambda (untracked location)
                  (unless (gethash location mark)
+                   ;; It would be faster to delete all of these
+                   ;; from an in-memory copy of the nodes, then
+                   ;; write when done, but this works for now.
+                   (remove-from-linked-node
+                    (lambda (x)
+                      (destructuring-bind (type store-location)
+                          x
+                        (declare (ignore type))
+                        (equal location store-location)))
+                    (untracked-objects-loc-of *loom-store*))
                    (remhash untracked (untracked->location-of *loom-store*))
                    (remhash location (location->untracked-of *loom-store*))
                    (remhash location (untracked-dependencies-of *loom-store*))
