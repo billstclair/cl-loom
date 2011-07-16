@@ -389,7 +389,7 @@ the loom.cc server."
 
 (defun url-encode-loom-client-string (str &optional (external-format *loom-client-default-external-format*))
   (if (and *url-encode-loom-client-strings*
-           (find-if (lambda (char) (>= (char-code char) 256)) str))
+           (find-if (lambda (char) (>= (char-code char) 128)) str))
       (map 'string #'code-char
            (flexi-streams:string-to-octets
             str :external-format external-format))
