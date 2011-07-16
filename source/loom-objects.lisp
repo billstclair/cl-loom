@@ -685,7 +685,7 @@ objects."
                                 &key count)
   "Remove elements from the linked nodes at location where predicate evaluates
 to t when called on the element. If count is a number, terminate after the first
-count deletions. Nodes before the last node are guaranteed to have <= to
+count deletions. Nodes before the last node are guaranteed to have >= to
 (* *minimum-linked-node-fill* *max-linked-node-length*) elements."
   (let ((deleted-elements nil)
         (deletions 0)
