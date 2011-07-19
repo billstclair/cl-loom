@@ -414,7 +414,7 @@ the loom.cc server."
                       (keep-alive-p (not (null stream))))
                  (multiple-value-bind (res status headers uri http-stream)
                      (drakma:http-request uri
-                                          :method :get
+                                          :method :POST
                                           :parameters (alexandria:plist-alist stringified-args)
                                           :external-format-out ':latin-1
                                           :external-format-in ':latin-1

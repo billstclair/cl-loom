@@ -352,7 +352,7 @@ Uses the values from *loom-store*"
   "Maps a function of (location node) over the linked nodes."
   (loop for loc = location then (linked-node-next current)
      for current = (and (typep loc 'loom-loc)
-                        (loom-store-get location))
+                        (loom-store-get loc))
      while current do
        (funcall fn loc current)))
 
