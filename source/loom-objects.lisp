@@ -141,6 +141,12 @@ themselves be persisted to the current *loom-store*."))
     :initform (make-hash-table :test 'eq)
     :accessor class-hash-of
     :documentation "class-object -> location")
+
+   ;; Cache nodes.
+   (node-hash
+    :initform (make-hash-table :test #'equal)
+    :accessor node-hash-of
+    :documentation "location -> node struct instance")
    ))
 
 ;;; 
@@ -346,13 +352,31 @@ Uses the values from *loom-store*"
                       (%loom-object 'slots)))
         value))
 
+
+
+;;; ----------------------------------------------------------------------------
+
+(defun loom-node-get (loc)
+  (or (gethash loc (node-hash-of *loom-store*))
+      (setf (gethash loc (node-hash-of *loom-store*))
+            (loom-store-get loc))))
+
+(defun (setf loom-node-get) (node &optional loc)
+  (cond ((null node)
+         (remhash loc (node-hash-of *loom-store*))
+         (values nil loc))
+        (t (multiple-value-bind (val loc)
+               (setf (loom-store-get loc) node)
+             (setf (gethash loc (node-hash-of *loom-store*)) val)
+             (values val loc)))))
+
 ;;; ----------------------------------------------------------------------------
 
 (defun map-linked-nodes (fn location)
   "Maps a function of (location node) over the linked nodes."
   (loop for loc = location then (linked-node-next current)
      for current = (and (typep loc 'loom-loc)
-                        (loom-store-get loc))
+                        (loom-node-get loc))
      while current do
        (funcall fn loc current)))
 
@@ -488,7 +512,7 @@ reader package for loom-store serialization. Binds the resulting loom-store to
 ;;; ----------------------------------------------------------------------------
 
 (defun %read-loom-store-classes (store)
-  (let* ((root-node (loom-store-get (root-loc-of store)))
+  (let* ((root-node (loom-node-get (root-loc-of store)))
          (class-nodes (collect-linked-nodes
                        (%loom-root-class-loc root-node)))
          (elements (mapcan #'%loom-node-elements class-nodes)))
@@ -504,7 +528,7 @@ reader package for loom-store serialization. Binds the resulting loom-store to
 ;;; ----------------------------------------------------------------------------
 
 (defun %read-loom-store-untracked-objects (store)
-  (let* ((root-node (loom-store-get (root-loc-of store)))
+  (let* ((root-node (loom-node-get (root-loc-of store)))
          (untracked-nodes (collect-linked-nodes
                            (%loom-root-untracked-objects-loc root-node)))
          (elements (mapcan #'%loom-untracked-object-pairs untracked-nodes)))
@@ -550,26 +574,27 @@ linked node that is not the last.")
 (defun %append-new-nodes (node objects)
   "Append new linked nodes to hold objects."
   (let ((insert-size (length objects))
-        location first-location)
+        location)
     (loop
+       with node-stack = nil
        while (plusp insert-size)
        for use = (min *max-linked-node-length* insert-size)
        for nval = (linked-node-create node (subseq objects 0 use))
        do
          (decf insert-size use)
          (setf objects (subseq objects use))
-         (multiple-value-bind (nval nloc)
-             (setf (loom-store-get) nval)
-           (unless first-location
-             (setf first-location nloc))
-           (when (and node location)
-             (setf (linked-node-next node) nloc
-                   (loom-store-get location) node))
-           (setf node nval
-                 location nloc)))
-    ;; return the first allocated location
-    ;; this is necessary for starting a new linked node list
-    first-location))
+         (push nval node-stack)
+       finally
+         (loop for nval in node-stack
+            do
+              (when location
+                (setf (linked-node-next nval) location))
+              (multiple-value-bind (nval nloc)
+                  (setf (loom-node-get) nval)
+                (declare (ignore nval))
+                (setf location nloc)))
+         ;; Return first allocated location
+         (return location))))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -592,7 +617,7 @@ Returns the last seen node, location, and the remaining objects."
              (setf (linked-node-elements node)
                    (append node-elements (subseq objects 0 use))
                    objects (subseq objects use)
-                   (loom-store-get location) node)))
+                   (loom-node-get location) node)))
          ;; if all of our inserts are done, return
          (when (zerop insert-size)
            (return-from %insert-into-old-nodes 
@@ -611,7 +636,7 @@ objects."
     (when (and last-node objects)
       (setf (linked-node-next last-node)
             (%append-new-nodes last-node objects))
-      (setf (loom-store-get last-location) last-node))
+      (setf (loom-node-get last-location) last-node))
     location))
 
 ;;; ----------------------------------------------------------------------------
@@ -652,7 +677,8 @@ objects."
                   (chunks (chunk elements *max-linked-node-length*)))
              (setf locations (nreverse locations))
              (mapc (lambda (location)
-                     (loom-store-sell location))
+                     (loom-store-sell location)
+                     (setf (loom-node-get location) nil))
                    (subseq (cdr locations) (max 0 (1- (length chunks)))))
              (mapcar ;; collect location/node/modified triples
               (lambda (location node)
@@ -676,7 +702,7 @@ objects."
                 (node (cadr x))
                 (modified (caddr x)))
             (when modified
-              (setf (loom-store-get location) node))))
+              (setf (loom-node-get location) node))))
         loc/node/mod-triples))
 
 ;;; ----------------------------------------------------------------------------
