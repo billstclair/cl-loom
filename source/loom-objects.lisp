@@ -1023,8 +1023,9 @@ Calls load-loom-location for slot locations."
               (maphash
                (lambda (key val)
                  (destructuring-bind (type location) val
-                   (setf (slot-value instance key)
-                         (load-loom-location type location))))
+                   (when location
+                     (setf (slot-value instance key)
+                           (load-loom-location type location)))))
                stored-slots)
               ;; Set weak links
               (setf (gethash id (ids->instances-of class)) instance
@@ -1078,13 +1079,20 @@ Calls load-loom-location for slot locations."
       (setf (%loom-object-slots loom-object)
             (loop
                for slot in slots
-               for slot-value = (slot-value-using-class class instance slot)
+               for name = (slot-definition-name slot)
+               for slot-value =
+                 (if (slot-boundp instance name)
+                     (slot-value-using-class class instance slot)
+                     nil)
                collect
                  (list (slot-definition-name slot)
-                       (if (typep (class-of slot-value) 'loom-persist)
-                           (class-name (class-of slot-value))
-                           (class-name (determine-class slot-value)))
-                       (persist-thing slot-value))))
+                       (cond ((typep (class-of slot-value) 'loom-persist)
+                              (class-name (class-of slot-value)))
+                             ((slot-boundp instance name)
+                              (class-name (determine-class slot-value)))
+                             (t nil))
+                       (when (slot-boundp instance name)
+                         (persist-thing slot-value)))))
       (let* ((id (get-instance-id class instance))
              (location (or (gethash (list class-name id)
                                     (location->class/id-of *loom-store*))
@@ -1137,13 +1145,10 @@ Calls load-loom-location for slot locations."
 (defun %persist-loom-slots-of-untracked
     (slot value current-def)
   (let ((current-location (elt current-def 2))
-        (type (determine-class value)))
-    (unless (and 
-             (eq type (elt current-def 1))
-             slot-location (string= slot-location current-location))
-      (list (slot-definition-name slot)
-            (class-name type)
-            (persist-thing value current-location)))))
+        (type (when value (determine-class value))))
+    (list (slot-definition-name slot)
+          (class-name type)
+          (persist-thing value :location current-location))))
   
 ;;; ----------------------------------------------------------------------------
 
@@ -1161,8 +1166,10 @@ untracked objects and links loom-objects."
      location loom-object
      (mapcar
       (lambda (slot)
-        (let ((value (slot-value-using-class
-                      class instance slot))
+        (let ((value (if (slot-boundp instance (slot-definition-name slot))
+                         (slot-value-using-class
+                          class instance slot)
+                         nil))
               (def (find (slot-definition-name slot)
                          (%loom-object-slots loom-object)
                          :key #'car :test #'eq)))
@@ -1266,24 +1273,6 @@ untracked objects and links loom-objects."
       
       ;; Remove instance node
       (loom-store-sell location))))
-
-      (maphash (lambda (untracked location)
-                 (unless (gethash location mark)
-                   ;; It would be faster to delete all of these
-                   ;; from an in-memory copy of the nodes, then
-                   ;; write when done, but this works for now.
-                   (remove-from-linked-node
-                    (lambda (x)
-                      (destructuring-bind (type store-location)
-                          x
-                        (declare (ignore type))
-                        (equal location store-location)))
-                    (untracked-objects-loc-of *loom-store*))
-                   (remhash untracked (untracked->location-of *loom-store*))
-                   (remhash location (location->untracked-of *loom-store*))
-                   (remhash location (untracked-dependencies-of *loom-store*))
-                   (loom-store-sell location)))
-               (untracked->location-of *loom-store*)))))
 
 ;;; ----------------------------------------------------------------------------
 
