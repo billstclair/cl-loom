@@ -1136,17 +1136,14 @@ Calls load-loom-location for slot locations."
 
 (defun %persist-loom-slots-of-untracked
     (slot value current-def)
-  (let ((slot-location
-         (gethash value (untracked->location-of *loom-store*)))
-        (current-location (elt current-def 2))
+  (let ((current-location (elt current-def 2))
         (type (determine-class value)))
     (unless (and 
              (eq type (elt current-def 1))
              slot-location (string= slot-location current-location))
       (list (slot-definition-name slot)
             (class-name type)
-            (or slot-location
-                (persist-thing value))))))
+            (persist-thing value current-location)))))
   
 ;;; ----------------------------------------------------------------------------
 
@@ -1187,7 +1184,7 @@ untracked objects and links loom-objects."
 
 ;;; ----------------------------------------------------------------------------
                                           
-(defun persist-thing (thing)
+(defun persist-thing (thing &key (location t))
   "Persists a thing, returning the thing's location."
   (let ((class (class-of thing)))
     (typecase class
@@ -1198,25 +1195,16 @@ untracked objects and links loom-objects."
          (or location
              (initially-persist-loom-instance (class-of thing) thing))))
       (otherwise
-       (let ((location (gethash thing (untracked->location-of *loom-store*))))
-         (cond ((typep location 'loom-loc)
-                (unless (loom-equality-test
-                         thing
-                         (read-from-location (determine-class thing)
-                                             location))
-                  (write-to-location thing location))
-                location)
-               (t
-                (multiple-value-bind (location type)
-                    (write-to-location thing t)
-                  (add-to-linked-node
-                   `((,(class-name type) ,location))
-                   (untracked-objects-loc-of *loom-store*))
-                  (let ((luh (location->untracked-of *loom-store*))
-                        (ulh (untracked->location-of *loom-store*)))
-                    (setf (gethash location luh) thing
-                          (gethash thing ulh) location))
-                  location))))))))
+       (multiple-value-bind (location type)
+           (write-to-location thing location)
+         (add-to-linked-node
+          `((,(class-name type) ,location))
+          (untracked-objects-loc-of *loom-store*))
+         (let ((luh (location->untracked-of *loom-store*))
+               (ulh (untracked->location-of *loom-store*)))
+           (setf (gethash location luh) thing
+                 (gethash thing ulh) location))
+         location)))))
     
 ;;; ----------------------------------------------------------------------------
 
@@ -1244,7 +1232,8 @@ untracked objects and links loom-objects."
     (let* ((id (gethash thing (instances->ids-of class)))
            (class/id `(,(class-name class) ,id))
            (location (gethash class/id
-                              (class/id->location-of *loom-store*))))
+                              (class/id->location-of *loom-store*)))
+           (object (loom-store-get location)))
       ;; Remove from loom class instance-list
       (remove-from-linked-node
        (lambda (x)
@@ -1262,8 +1251,39 @@ untracked objects and links loom-objects."
       ;; Wipe class hashes of thing
       (remhash id (ids->instances-of class))
       (remhash thing (instances->ids-of class))
+      
+      (let (children)
+        (mapc (lambda (ntl)
+                (let ((name (car ntl))
+                      (type (cadr ntl))
+                      (loc (caddr ntl)))
+                  (declare (ignore name))
+                  (when (not (typep (find-class type) 'loom-persist))
+                    (push loc children)
+                    (push (get-dependencies type loc) children))))
+              (%loom-object-slots object))
+        (mapc #'loom-store-sell children))
+      
       ;; Remove instance node
       (loom-store-sell location))))
+
+      (maphash (lambda (untracked location)
+                 (unless (gethash location mark)
+                   ;; It would be faster to delete all of these
+                   ;; from an in-memory copy of the nodes, then
+                   ;; write when done, but this works for now.
+                   (remove-from-linked-node
+                    (lambda (x)
+                      (destructuring-bind (type store-location)
+                          x
+                        (declare (ignore type))
+                        (equal location store-location)))
+                    (untracked-objects-loc-of *loom-store*))
+                   (remhash untracked (untracked->location-of *loom-store*))
+                   (remhash location (location->untracked-of *loom-store*))
+                   (remhash location (untracked-dependencies-of *loom-store*))
+                   (loom-store-sell location)))
+               (untracked->location-of *loom-store*)))))
 
 ;;; ----------------------------------------------------------------------------
 
@@ -1305,56 +1325,6 @@ untracked objects and links loom-objects."
 (defun get-dependencies (type location)
   (or (gethash location (untracked-dependencies-of *loom-store*))
       (read-location-dependencies type location)))
-
-;;; ----------------------------------------------------------------------------
-
-(defun loom-garbage-collect ()
-  (with-loom-store (*loom-store*)
-    (let ((mark (make-hash-table :test 'equal))
-          (stack nil))
-      ;; Collect direct objects
-      (maphash
-       (lambda (class/id location)
-         (declare (ignore location))
-         (map-tracked-slots
-          (lambda (slot-value)
-            (unless (typep (class-of slot-value) 'loom-persist)
-              (let ((type (class-name (determine-class slot-value)))
-                    (loc (gethash slot-value
-                                  (untracked->location-of *loom-store*))))
-                (push (list type loc) stack))))
-          (load-loom-instance (find-class (car class/id)) (cadr class/id))))
-       (class/id->location-of *loom-store*))
-      ;; Recursive Mark
-      (flet ((mark-it (loc)
-               (prog1 (gethash loc mark)
-                 (setf (gethash loc mark) t))))
-        (loop
-           while stack
-           for current = (pop stack)
-           for type = (car current) for loc = (cadr current)
-           do
-             (unless (mark-it loc)
-               (mapc (lambda (dep) (push dep stack))
-                     (get-dependencies type loc)))))
-      ;; Sweep
-      (maphash (lambda (untracked location)
-                 (unless (gethash location mark)
-                   ;; It would be faster to delete all of these
-                   ;; from an in-memory copy of the nodes, then
-                   ;; write when done, but this works for now.
-                   (remove-from-linked-node
-                    (lambda (x)
-                      (destructuring-bind (type store-location)
-                          x
-                        (declare (ignore type))
-                        (equal location store-location)))
-                    (untracked-objects-loc-of *loom-store*))
-                   (remhash untracked (untracked->location-of *loom-store*))
-                   (remhash location (location->untracked-of *loom-store*))
-                   (remhash location (untracked-dependencies-of *loom-store*))
-                   (loom-store-sell location)))
-               (untracked->location-of *loom-store*)))))
 
 ;;; ----------------------------------------------------------------------------
 
