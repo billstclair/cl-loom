@@ -1148,7 +1148,9 @@ Calls load-loom-location for slot locations."
         (type (when value (determine-class value))))
     (list (slot-definition-name slot)
           (class-name type)
-          (persist-thing value :location current-location))))
+          (persist-thing value
+                         :location (if (typep current-location 'loom-loc)
+                                       current-location t)))))
   
 ;;; ----------------------------------------------------------------------------
 
