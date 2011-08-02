@@ -187,3 +187,50 @@ depends returns a list of nodes. Does not detect cycles."
                 (when post (funcall post el)))
               (funcall leaf el)))
         (funcall nodes tree)))
+
+;;; ----------------------------------------------------------------------------
+
+(defun parse-hex (string)
+  (declare 
+   (optimize (speed 3) (safety 0) (compilation-speed 0) (space 0) (debug 0))
+   (type string string))
+  (flet ((digit (x)
+           (let ((code (char-code x)))
+             (declare (type fixnum code))
+             (cond ((and (<= code 57) (>= code 48))
+                    (the fixnum (- code 48)))
+                   ((and (>= code 97) (<= code 102))
+                    (the fixnum (- code 87)))
+                   ((and (<= code 70) (>= code 65))
+                    (the fixnum (- code 55)))
+                   (t (error "not a hexadecimal digit"))))))
+    (declare (inline digit))
+    (let ((num 0) (len (length string)))
+      (declare (type integer num)
+               (type fixnum len))
+      (do ((x 0 (incf x)))
+          ((= x len) num)
+        (declare (type fixnum x))
+        (setf num (+ (digit (aref string x)) (ash num 4)))))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun print-hex (integer &key (padding 0))
+  (declare 
+   (optimize (speed 3) (safety 0) (compilation-speed 0) (space 0) (debug 0))
+   (type integer integer padding))
+  (let* ((chars "0123456789abcdef")
+         (len (max padding (ceiling (log integer 16))))
+         (ret (make-array len :element-type 'character)))
+    (declare
+     (type fixnum len)
+     (type (vector character) chars ret))
+    (do ((x (* (1- len) 4) (1- x)) (el 0 (1+ el)))
+        ((= el len) ret)
+      (declare (type fixnum el x))
+      (setf (aref ret el)
+            (aref chars (ldb (byte 4 x) integer))))))
+
+;;; ============================================================================
+;;; EOF
+;;; ============================================================================

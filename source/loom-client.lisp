@@ -536,6 +536,11 @@ Returns two values:
     (and (equal "fail" (kv-lookup "status" res))
          (equal "vacant" (kv-lookup "error_loc" res)))))
 
+(defun random-vacant-asset-type ()
+  (loop for loc = (random-loc)
+     when (= (grid-touch loc *zero* t t) -1)
+     return loc))
+
 (defun random-vacant-grid-loc (asset-type)
   (loop for loc = (random-loc)
      when (grid-vacant-p asset-type loc)
@@ -584,15 +589,19 @@ Result isn't yet parsed. Do that when you need this function."
         (grid-request :scan :locs locs-string :types types-string))))
 
 (defun create-asset (asset-type issuer-loc &optional (usage issuer-loc))
-  "Create a new asset of tye ASSET-TYPE at ISSUER-LOC.
+  "Create a new asset of type ASSET-TYPE at ISSUER-LOC.
 Use usage tokens from USAGE, default: ISSUER-LOC."
-  (let ((value (grid-touch asset-type issuer-loc t t)))
-    (unless (and value (< value 0))     ;already issuer?
-      (grid-buy asset-type issuer-loc usage t)
-      (grid-buy asset-type *zero* usage t)
-      (grid-issuer asset-type *zero* issuer-loc))))
+  (let* ((type (if (typep asset-type 'loom-loc)
+                   asset-type (random-vacant-asset-type)))
+         (issuer (if (typep issuer-loc 'loom-loc)
+                     issuer-loc (random-vacant-grid-loc type))))
+    (grid-buy type issuer-loc usage t)
+    (grid-buy type *zero* usage t)
+    (grid-issuer type *zero* issuer-loc)
+    (grid-sell type *zero* usage)))
 
 (defun destroy-asset (asset-type issuer-loc &optional (usage issuer-loc))
+  (grid-buy asset-type *zero* usage t)
   (grid-issuer asset-type issuer-loc *zero*)
   (grid-sell asset-type issuer-loc usage)
   (grid-sell asset-type *zero* usage))

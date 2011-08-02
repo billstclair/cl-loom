@@ -90,6 +90,8 @@
            loom-loc-xor
            fold-hash
            string-to-hex
+           parse-hex
+           print-hex
            make-asset-description
            
            loom-passphrase
@@ -135,13 +137,16 @@
 
            ;; loom-objects.lisp
            loom-persist
+
            loom-store
+           ;; accessors
+           root-loc-of
+           usage-loc-of
+           
            with-loom-store
            *root-location-file*
            save-root-location-file
            make-loom-store
-           root-loc-of
-           usage-loc-of
            *max-linked-node-length*
            *minimum-linked-node-fill*
            read-location-dependencies
