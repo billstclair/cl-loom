@@ -447,47 +447,48 @@ reader package for loom-store serialization. Binds the resulting loom-store to
 *loom-store*."
   (check-type server loom-server)
   (check-type root-location-load-path (or string pathname))
-  (when (and (or (typep root-location-load-path 'string)
-                 (typep root-location-load-path 'pathname))
-             (probe-file root-location-load-path)
-             (eq root-loc t))
-    (setf root-loc (load-root-location root-location-load-path)))
-  (check-type root-loc (or loom-loc null))
-  (let ((root-node nil))
-    (cond (root-loc
-           (setf root-node (%loom-store-get root-loc package))
-           (check-type root-node %loom-root))
-          (t (let* ((package-name (package-name package)))
-               (check-type usage-loc loom-loc)
-               (setf root-node
-                     (make-%loom-root
-                      :class-loc
-                      (nth-value 1
-                                 (setf (%loom-store-get nil package-name usage-loc)
-                                       (make-%loom-node :type 'class-list)))
-                      :untracked-objects-loc
-                      (nth-value 1
-                                 (setf (%loom-store-get nil package-name usage-loc)
-                                       (make-%loom-untracked-object)))
-                      :usage-loc usage-loc
-                      :package package-name)))
-             (multiple-value-bind (value loc)
-                 (setf (%loom-store-get root-loc
-                                        (%loom-root-package root-node)
-                                        (%loom-root-usage-loc root-node))
-                       root-node)
-               (declare (ignore value))
-               (setf root-loc loc))))
-    (when save-location (save-root-location root-loc root-location-load-path))
-    (make-instance 'loom-store
-                   :server server
-                   :root-loc root-loc
-                   :classes-loc (%loom-root-class-loc root-node)
-                   :untracked-objects-loc (%loom-root-untracked-objects-loc
-                                           root-node)
-                   :usage-loc (%loom-root-usage-loc root-node)
-                   :package (find-package (%loom-root-package root-node)))))
-
+  (with-loom-server (server)
+    (when (and (or (typep root-location-load-path 'string)
+                   (typep root-location-load-path 'pathname))
+               (probe-file root-location-load-path)
+               (eq root-loc t))
+      (setf root-loc (load-root-location root-location-load-path)))
+    (check-type root-loc (or loom-loc null))
+    (let ((root-node nil))
+      (cond (root-loc
+             (setf root-node (%loom-store-get root-loc package))
+             (check-type root-node %loom-root))
+            (t (let* ((package-name (package-name package)))
+                 (check-type usage-loc loom-loc)
+                 (setf root-node
+                       (make-%loom-root
+                        :class-loc
+                        (nth-value 1
+                                   (setf (%loom-store-get nil package-name usage-loc)
+                                         (make-%loom-node :type 'class-list)))
+                        :untracked-objects-loc
+                        (nth-value 1
+                                   (setf (%loom-store-get nil package-name usage-loc)
+                                         (make-%loom-untracked-object)))
+                        :usage-loc usage-loc
+                        :package package-name)))
+               (multiple-value-bind (value loc)
+                   (setf (%loom-store-get root-loc
+                                          (%loom-root-package root-node)
+                                          (%loom-root-usage-loc root-node))
+                         root-node)
+                 (declare (ignore value))
+                 (setf root-loc loc))))
+      (when save-location (save-root-location root-loc root-location-load-path))
+      (make-instance 'loom-store
+                     :server server
+                     :root-loc root-loc
+                     :classes-loc (%loom-root-class-loc root-node)
+                     :untracked-objects-loc (%loom-root-untracked-objects-loc
+                                             root-node)
+                     :usage-loc (%loom-root-usage-loc root-node)
+                     :package (find-package (%loom-root-package root-node))))))
+  
 ;;; ----------------------------------------------------------------------------
 
 (defun %read-class-instances (store class instance-loc)
