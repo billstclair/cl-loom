@@ -2,80 +2,185 @@
 
 (in-package :loom)
 
+;;;; ===========================================================================
+;;;; ===========================================================================
 ;;;;
 ;;;; Loom client
 ;;;;
+;;;; ===========================================================================
+;;;; ===========================================================================
 
-(defparameter *loom-api-base-uri* "https://loom.cc/")
+;;; ----------------------------------------------------------------------------
+;;; Global variables
+;;; ----------------------------------------------------------------------------
 
-(defparameter *loom-server-source-dir*
-  (let ((dir (pathname-directory *load-truename*))
-        (dev (pathname-device *load-truename*)))
-    (merge-pathnames "../loom-perl/" (make-pathname :device dev :directory dir))))
+(defparameter *configuration-file*
+  (merge-pathnames
+   (make-pathname :name "configuration"
+                  :type "sexp")
+   cl-user::*cl-loom-source-file*))
 
-(defun loom-server-config-dir ()
-  (merge-pathnames "data/conf/" *loom-server-source-dir*))
+(defparameter *configuration*
+  (let ((path *configuration-file*))
+    (with-standard-io-syntax
+      (let ((*package* (find-package :loom)))
+        (with-open-file (str path :direction :input :if-does-not-exist nil)
+          (and str
+               (or (read str nil nil)
+                   (error (format nil "Failed to read ~s" path)))))))))
 
-(defun loom-server-binary-pathname ()
-  (merge-pathnames "code/bin/loom" *loom-server-source-dir*))
+(defparameter *default-configuration*
+  '(loom-configuration
+    (hostname "loom.cc")
+    (port 9090)
+    (path "/")
+    (use-ssl t)
+    (local nil)
+    (base-dir :unused)
+    (config-dir :unused)
+    (binary-path :unused))
+  "Typically configuration is loaded from <basedir>/configuration.sexp
+This is used only when :default-setup-p t is passed to (make-instance 'server ...)
+or when no configuration.sexp file is found.")
 
-(defstruct loom-server-setup
-  (host "localhost")
-  (port 8286)
-  (path "/")
-  (use-ssl-p nil)
-  (config-dir (loom-server-config-dir))
-  (binary-pathname (loom-server-binary-pathname)))
+(defun loom-server-base-dir ()
+  "Return a path to the local loom server base directory"
+  (merge-pathnames
+   (make-pathname :directory '(:relative "Loom")
+                  :name :unspecific
+                  :type :unspecific)
+   cl-user::*cl-loom-source-file*))
 
-(defparameter *default-setup* (make-loom-server-setup))
+(defun make-configuration (&key
+                           (hostname "127.0.0.1")
+                           (port 8286)
+                           (path "/")
+                           (use-ssl nil)
+                           (local t)
+                           (base-dir (loom-server-base-dir))
+                           (config-dir #p"data/conf/")
+                           (binary-path #p"code/loom"))
+  "Make a configuration alist suitable for passing as the CONFIG arg
+to MAKE-LOOM-SERVER. Defaults are for a local server."
+  `(loom-configuration
+    (hostname ,hostname)
+    (port ,port)
+    (path ,path)
+    (use-ssl ,use-ssl)
+    (local ,local)
+    (base-dir ,base-dir)
+    (config-dir ,config-dir)
+    (binary-path ,binary-path)))
 
-(defun setup-uri (&optional (setup *default-setup*))
+;;; ----------------------------------------------------------------------------
+;;; Configuration functions
+;;; ----------------------------------------------------------------------------
+
+(defun config-option (option &optional (config *configuration*))
+  (cadr (assoc option (cdr config) :test #'eq)))
+
+;;; ----------------------------------------------------------------------------
+
+(defun (setf config-option) (new-value option &optional (config *configuration*))
+  (let ((search (assoc option (cdr config) :test #'eq)))
+    (if search
+        (car (rplaca (cdr search) new-value))
+        (nconc config
+               (list (list option new-value))))))
+
+;;; ----------------------------------------------------------------------------
+
+(defun config-path (name &optional (config *configuration*))
+  (merge-pathnames (config-option name config)
+                   (config-option 'base-dir config)))
+
+;;; ----------------------------------------------------------------------------
+
+(defun save-configuration (&key
+                           (path *configuration-file*)
+                           (config *configuration*))
+  (with-open-file (file path
+                        :direction :output
+                        :if-exists :supersede
+                        :if-does-not-exist :create)
+    (let ((*print-pretty* t)
+          (*print-case* :downcase))
+      (pprint-linear file config t))))
+
+;;; ----------------------------------------------------------------------------
+
+;; The server for all the functions.
+;; Bind it with-loom-server or with-loom-transaction
+(defvar *loom-server* nil)
+
+#+ccl
+(ccl::define-standard-initial-binding '*loom-server*
+    (lambda () nil))
+
+(defmacro with-loom-server ((server) &body body)
+  `(let ((*loom-server* ,server))
+     (check-type *loom-server* loom-server)
+     ,@body))
+
+(defmacro with-server-bound ((&optional (server '*loom-server*)) &body body)
+  `(let ((server ,server))
+     (check-type server loom-server)
+     ,@body))
+
+;;; ----------------------------------------------------------------------------
+
+(defun generate-uri (&optional (config *configuration*))
   (format nil "~a://~a:~a~a"
-          (if (loom-server-setup-use-ssl-p setup) "https" "http")
-          (loom-server-setup-host setup)
-          (loom-server-setup-port setup)
-          (loom-server-setup-path setup)))
+          (if (config-option 'use-ssl config) "https" "http")
+          (config-option 'hostname config)
+          (config-option 'port config)
+          (config-option 'path config)))
 
 ;; Default setup connects to loom.cc
 ;; (make-instance 'loom-server :default-setup-p t) makes a local server
+
 (defclass loom-server ()
-  ((base-uri :initform *loom-api-base-uri* :initarg :base-uri :accessor base-uri-of)
-   (setup :initform nil
-          :initarg :setup
-          :accessor setup-of
-          :type (or null loom-server-setup)))
-  (:documentation "The URI and setup information for a Loom server
+  ((base-uri :initform nil ;; set during (initialize-instance :after))
+             :initarg :base-uri
+             :accessor base-uri-of)
+   (config :initform *configuration*
+           :initarg :config
+           :accessor config-of))
+  (:documentation "The URI and configuration information for a Loom server
 By default, it points at loom.cc.
 Pass true for the :DEFAULT-SETUP-P initarg, and it will use the default settings
-for a local server.
-Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."))
+for a local server."))
+
+;;; ----------------------------------------------------------------------------
 
 (defmethod initialize-instance :after ((server loom-server)
-                                       &key default-setup-p setup
+                                       &key default-setup-p config
                                        &allow-other-keys)
-  (when (and default-setup-p (not setup))
-    (setf setup *default-setup*
-          (setup-of server) setup))
-  (when setup
-    (check-type setup loom-server-setup)
-    (setf (setup-of server) setup
-          (base-uri-of server) (setup-uri setup))))
+  (when (or (and default-setup-p (not config))
+            (not *configuration*))
+    (setf (config-of server)
+          *default-configuration*))
+  (setf (base-uri-of server)
+        (generate-uri (config-of server)))
+  (when (config-option 'local config)
+    (let ((*loom-server* server))
+      (attempt-loom-server-startup t))))
 
 (defmethod print-object ((server loom-server) stream)
   (print-unreadable-object (server stream :type t)
     (format stream "~s" (base-uri-of server))))
 
-;; With no args, returns the loom.cc server
-;; With a port of T, returns the default local server
-;; With a port of another number, returns a local server to that port
-(defun make-loom-server (&key setup port)
-  (cond (setup (make-instance 'loom-server :setup setup))
-        ((null port) (make-instance 'loom-server))
-        ((eq port t) (make-instance 'loom-server :default-setup-p t))
-        ((integerp port)
-         (make-instance 'loom-server
-                        :setup (make-loom-server-setup :port port)))
-        (t (error "Invalid port: ~s" port))))
+(defun make-loom-server (&optional config)
+  "Builds a loom server out of the configuration loaded from *configuration-file*,
+or uses a specified configuration. Setting config to t is a shortcut to create
+the loom.cc server."
+  (cond
+    ((and (consp config)
+          (eq (car config) 'loom-configuration))
+     (make-instance 'loom-server :config config))
+    ((eq config t)
+     (make-instance 'loom-server :default-setup-p t))
+    (t (make-instance 'loom-server))))
 
 ;; KV format examples: https://secure.loom.cc/?function=archive_tutorial&help=1
 ;; (
@@ -123,6 +228,9 @@ Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."
   ;; Errors provide most (but not all) key/value information to clients
   ((error-args :initarg :error-args :initform nil :reader loom-client-error-args)))
 
+(defgeneric get-loom-error-property (e keyname)
+  (:documentation ""))
+
 (defmethod get-loom-error-property ((e loom-client-error) keyname)
   (cdr (find (downcase-princ-to-string keyname) (loom-client-error-args e)
              :key #'car :test #'equal)))
@@ -150,24 +258,6 @@ Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."
               (downcase-princ-to-string (car pair))
               (downcase-princ-to-string (cdr pair))))
     (format s ")~%")))
-
-;; The server for all the functions.
-;; Bind it with-loom-server or with-loom-transaction
-(defvar *loom-server* nil)
-
-#+ccl
-(ccl::define-standard-initial-binding '*loom-server*
-    (lambda () nil))
-
-(defmacro with-loom-server ((server) &body body)
-  `(let ((*loom-server* ,server))
-     (check-type *loom-server* loom-server)
-     ,@body))
-
-(defmacro with-server-bound ((&optional (server '*loom-server*)) &body body)
-  `(let ((server ,server))
-     (check-type server loom-server)
-     ,@body))
 
 (defvar *transaction-stream* nil)
 (defparameter *transaction-retry-count* 5)
@@ -216,19 +306,28 @@ Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."
   "Rewrite the configuration for a local server and restart it."
   (attempt-loom-server-startup t))
 
+;;; ----------------------------------------------------------------------------
+
 (defvar *attempting-loom-server-startup* nil)
 
-;; See https://github.com/billstclair/Loom/wiki/Config
-(defun attempt-loom-server-startup (&optional initialize-p)
-  (with-server-bound ()
-    (let* ((setup (setup-of server))
-           (config-dir (and setup (loom-server-setup-config-dir setup)))
-           (binary-pathname (and setup (loom-server-setup-binary-pathname setup))))
-      (unless (and config-dir binary-pathname)
-        (error "Can't start up non-local Loom server: ~s" server))
+(defun attempt-loom-server-startup (&optional (initialize-p t))
+  "See https://github.com/billstclair/Loom/wiki/Config"
+  (with-server-bound (*loom-server*)
+    (assert (config-option 'local (config-of server))
+            (server)
+            "Expected server ~a to be local.~%~s"
+            server (config-of server))
+    (let* ((*configuration* (config-of server))
+           (config-dir (config-path 'config-dir))
+           (binary-pathname (config-path 'binary-path)))
+      (assert (and config-dir (pathnamep config-dir) (probe-file config-dir)
+                   binary-pathname (pathnamep binary-pathname)
+                   (probe-file binary-pathname))
+              (config-dir binary-pathname)
+              "Expected config-dir=~a and binary-pathname=~a to be valid paths"
+              config-dir binary-pathname)
       ;; Shut down server
       (asdf:run-shell-command "'~a' -n" binary-pathname)
-
       ;; Write config files
       (let ((config-file (merge-pathnames "sloop" config-dir)))
         (when (or initialize-p (not (probe-file config-file)))
@@ -238,7 +337,7 @@ Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."
                              :if-does-not-exist :create)
             (write-string (alist-to-kv-string
                            `(("module" . "Loom::Web::Main")
-                             ("host_port" . ,(loom-server-setup-port setup))
+                             ("host_port" . ,(config-option 'port))
                              ("use_error_log" . 1)))
                           s))))
       (let ((loom-file (merge-pathnames "loom" config-dir)))
@@ -250,7 +349,6 @@ Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."
             (write-string
              (alist-to-kv-string '(("config_id" . "0123456789abcdef0123456789abcdef")))
              s))))
-
       ;; start server
       (asdf:run-shell-command "'~a' -y" binary-pathname)
       (sleep 0.5)
@@ -261,7 +359,6 @@ Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."
           (with-loom-transaction ()
             (sha256 "foo"))
           nil)))))
-
 
 ;; URL path for Loom API HTTP GET request is currently not URL-encoded in its
 ;; entirety.  Strings should be URL-encoded to protect multi-byte characters and
@@ -292,7 +389,7 @@ Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."
 
 (defun url-encode-loom-client-string (str &optional (external-format *loom-client-default-external-format*))
   (if (and *url-encode-loom-client-strings*
-           (find-if (lambda (char) (>= (char-code char) 256)) str))
+           (find-if (lambda (char) (>= (char-code char) 128)) str))
       (map 'string #'code-char
            (flexi-streams:string-to-octets
             str :external-format external-format))
@@ -317,7 +414,7 @@ Pass a LOOM-SERVER-SETUP instance for the :SETUP initarg, and it will use that."
                       (keep-alive-p (not (null stream))))
                  (multiple-value-bind (res status headers uri http-stream)
                      (drakma:http-request uri
-                                          :method :get
+                                          :method :POST
                                           :parameters (alexandria:plist-alist stringified-args)
                                           :external-format-out ':latin-1
                                           :external-format-in ':latin-1
@@ -439,6 +536,11 @@ Returns two values:
     (and (equal "fail" (kv-lookup "status" res))
          (equal "vacant" (kv-lookup "error_loc" res)))))
 
+(defun random-vacant-asset-type ()
+  (loop for loc = (random-loc)
+     when (= (grid-touch loc *zero* t t) -1)
+     return loc))
+
 (defun random-vacant-grid-loc (asset-type)
   (loop for loc = (random-loc)
      when (grid-vacant-p asset-type loc)
@@ -487,15 +589,19 @@ Result isn't yet parsed. Do that when you need this function."
         (grid-request :scan :locs locs-string :types types-string))))
 
 (defun create-asset (asset-type issuer-loc &optional (usage issuer-loc))
-  "Create a new asset of tye ASSET-TYPE at ISSUER-LOC.
+  "Create a new asset of type ASSET-TYPE at ISSUER-LOC.
 Use usage tokens from USAGE, default: ISSUER-LOC."
-  (let ((value (grid-touch asset-type issuer-loc t t)))
-    (unless (and value (< value 0))     ;already issuer?
-      (grid-buy asset-type issuer-loc usage t)
-      (grid-buy asset-type *zero* usage t)
-      (grid-issuer asset-type *zero* issuer-loc))))
+  (let* ((type (if (typep asset-type 'loom-loc)
+                   asset-type (random-vacant-asset-type)))
+         (issuer (if (typep issuer-loc 'loom-loc)
+                     issuer-loc (random-vacant-grid-loc type))))
+    (grid-buy type issuer-loc usage t)
+    (grid-buy type *zero* usage t)
+    (grid-issuer type *zero* issuer-loc)
+    (grid-sell type *zero* usage)))
 
 (defun destroy-asset (asset-type issuer-loc &optional (usage issuer-loc))
+  (grid-buy asset-type *zero* usage t)
   (grid-issuer asset-type issuer-loc *zero*)
   (grid-sell asset-type issuer-loc usage)
   (grid-sell asset-type *zero* usage))

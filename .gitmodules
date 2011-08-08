@@ -1,3 +1,4 @@
-[submodule "loom-perl"]
-	path = loom-perl
-	url = git://github.com/billstclair/Loom.git
+[submodule "Loom"]
+	path = Loom
+	url = git://github.com/chkoreff/Loom.git
+

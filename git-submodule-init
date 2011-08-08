@@ -2,3 +2,6 @@
 
 git submodule init
 git submodule update
+
+mkdir -p Loom/data
+mkdir -p Loom/data/conf
