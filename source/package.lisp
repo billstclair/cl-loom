@@ -83,6 +83,7 @@
            archive-write
 
            random-loc
+           sha256-function
            sha256
            grid-hash
            archive-hash
