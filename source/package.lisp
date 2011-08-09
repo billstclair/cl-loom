@@ -97,6 +97,7 @@
            loom-passphrase
            passphrase-location
            get-wallet
+           get-private-wallet
            wallet
            wallet-assets
            wallet-locations
