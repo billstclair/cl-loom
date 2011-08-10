@@ -697,15 +697,32 @@ second value from ARCHIVE-TOUCH or ARCHIVE-LOOK."
             res)))
 
 (defun random-loc ()
-  "Return a random LOOM location, as a 32-character hex number.
-Currently requires *loom-server* to be bound."
-  (kv-lookup "value" (request nil :function :random)))
+  "Return a random LOOM location, as a 32-character hex number."
+  ;;(kv-lookup "value" (request nil :function :random))
+  (string-downcase (format nil "~32,'0x" (cl-crypto:get-random-bits 128))))
+
+(defvar *sha256-function* nil)
+
+(defun sha256-function ()
+  "Return the function that computes the sha256 hash of a string."
+  (or *sha256-function* 'sha256))
+
+(defun (setf sha256-function) (function)
+  "Set a function of one arg, a string, which returns the sha256 hash of that string."
+  (setf *sha256-function* function))
 
 (defun sha256 (string)
   "Returns two values, the sha256 hash of STRING, a 256-bit number represented as
 64 hex characters, and the folding of that into a 128-bit Loom ID, as if by FOLD-HASH.
-Currently requires *loom-server* to be bound."
+Requires *loom-server* to be bound, unless you set a local function with (setf sha256-function)."
   (check-type string string)
+  (if (or (null *sha256-function*)
+          (eq 'sha256-internal *sha256-function*))
+      (sha256-internal string)
+      (let ((res (funcall *sha256-function* string)))
+        (values res (fold-hash res)))))
+
+(defun sha256-internal (string)
   (let ((res (request nil :function :hash :input string)))
     (values (kv-lookup "sha256_hash" res)
             (kv-lookup "folded_hash" res)
@@ -721,6 +738,20 @@ Currently requires *loom-server* to be bound."
             (code-char (parse-integer (subseq location pos (+ pos 2)) :radix 16)))
       (incf pos 2))
     str))
+
+(defun location-to-uint-8-array (location &optional
+                                 (array (make-array
+                                         16 :element-type '(unsigned-byte 8)))
+                                 (start 0))
+  (check-type location loom-loc)
+  (check-type array (array (unsigned-byte 8)))
+  (check-type start integer)
+  (let ((pos 0))
+    (dotimes (i 16)
+      (setf (aref array (+ i start))
+            (parse-integer (subseq location pos (+ pos 2)) :radix 16))
+      (incf pos 2))
+    array))
 
 (defun grid-hash (asset-type location)
   "Return the hash that can be passed to grid-look to read the value of
@@ -972,22 +1003,78 @@ If LOCATION-LIST is a WALLET instance, search its WALLET-LOCATIONS."
          (check-type location loom-loc)
          location)))
 
-(defun get-wallet (location &optional is-passphrase-p usage)
+(defun get-wallet (location &optional is-passphrase-p usage private-p)
   "Fetch, parse, and return, as a LOOM:WALLET instance, the loom wallet for LOCATION.
 If IS-PASSPHRASE-P is true, LOCATION is a passphrase, not a location.
 USAGE ignored here, but used by setf method."
-  (declare (ignore usage))
-  (parse-wallet-string
-   (archive-touch (passphrase-location location is-passphrase-p))))
+  (when private-p
+    (return-from get-wallet (get-private-wallet location is-passphrase-p usage)))
+  (setf location (passphrase-location location is-passphrase-p))
+  (values (parse-wallet-string (archive-touch location)) location))
 
-(defun (setf get-wallet) (wallet location &optional is-passphrase-p (usage location))
+(defun (setf get-wallet) (wallet location &optional is-passphrase-p usage private-p)
   "Save WALLET, a LOOM-WALLET:WALLET instance, to LOCATION on *LOOM-SERVER*.
 If IS-PASSPHRASE-P is true, LOCATION is a passphrase, not a location.
 USAGE is the location to use for debiting or crediting usage tokens.
 Defaults to LOCATION."
   (check-type wallet wallet)
+  (when private-p
+    (return-from get-wallet
+      (setf (get-private-wallet location is-passphrase-p usage) wallet)))
+  (unless usage (setf usage location))
   (setf location (passphrase-location location is-passphrase-p))
-  (archive-write location (wallet-string wallet) usage))
+  (archive-write location (wallet-string wallet) usage)
+  (values wallet location))
+
+(defun encrypt-string-for-location (string location)
+  (check-type string string)
+  (check-type location loom-loc)
+  (let* ((passphrase (location-to-uint-8-array location)))
+    (multiple-value-bind (res iv)
+        (cl-crypto:aes-encrypt-string string passphrase)
+      (concatenate 'string (cl-base64:usb8-array-to-base64-string iv) "|" res))))
+
+(defun encrypt-wallet-for-location (wallet location)
+  (check-type wallet wallet)
+  (check-type location loom-loc)
+  (encrypt-string-for-location (wallet-string wallet) location))
+
+(defun decrypt-string-from-location (string location)
+  (check-type string string)
+  (check-type location loom-loc)
+  (let* ((passphrase (location-to-uint-8-array location))
+         (iv-and-value (split-sequence:split-sequence #\| string))
+         (iv (cl-base64:base64-string-to-usb8-array (first iv-and-value))))
+    (cl-crypto:aes-decrypt-to-string
+     (second iv-and-value) passphrase :iv  iv)))
+
+(defun decrypt-wallet-from-location (wallet-string location)
+  (parse-wallet-string (decrypt-string-from-location wallet-string location)))
+
+(defun get-private-wallet (location &optional is-passphrase-p usage)
+  "Fetch, parse, and return, as a LOOM:WALLET instance, the private loom wallet
+for LOCATION, as saved by (SETF GET-PRIVATE-WALLET)
+If IS-PASSPHRASE-P is true, LOCATION is a passphrase, not a location.
+USAGE ignored here, but used by setf method."
+  (declare (ignore usage))
+  (setf location (passphrase-location location is-passphrase-p))
+  (let* ((hashed-location (nth-value 1 (sha256 location)))
+         (value (archive-touch hashed-location)))
+    (values (decrypt-wallet-from-location value location) hashed-location)))
+
+(defun (setf get-private-wallet) (wallet location &optional is-passphrase-p usage)
+  "Save WALLET, a LOOM-WALLET:WALLET instance, encrypted with LOCATION,
+to (SHA256 LOCATION) on *LOOM-SERVER*. If IS-PASSPHRASE-P is true,
+LOCATION is a passphrase, not a location.
+USAGE is the location to use for debiting or crediting usage tokens.
+Defaults to LOCATION."
+  (check-type wallet wallet)
+  (setf location (passphrase-location location is-passphrase-p))
+  (let ((hashed-location (nth-value 1 (sha256 location)))
+        (value (encrypt-wallet-for-location wallet location)))
+    (unless usage (setf usage hashed-location))
+    (archive-write hashed-location value usage)
+    (values wallet hashed-location)))
 
 (defun create-wallet (passphrase usage &key
                       (name "My Wallet")
@@ -995,7 +1082,8 @@ Defaults to LOCATION."
                       assets
                       locations
                       usage-source
-                      (usage-qty 100))
+                      (usage-qty 100)
+                      private-p)
   "Create a new wallet on *LOOM-SERVER* for PASSPHRASE.
 Error if there are already tokens or an archive value at that location.
 If USAGE-SOURCE, is specified, tranfer USAGE-QTY tokens to USAGE.
@@ -1006,7 +1094,11 @@ Add the usage token asset and and others in ASSETS, a list of LOOM:ASSET instanc
 If sponsor-name is non-NIL, add USAGE to the wallet with that name.
 If usage is the token issuer location, don't put any tokens at the new location.
 This is used for creating the token issuer account.
-Return the location of the new wallet."
+If PRIVATE-P is true, stores the wallet at the hash of the location,
+and encrypts it with the location as passphrase.
+Returns the location of the new wallet.
+If PRIVATE-P is true, the return value will be the hashed location, and
+the location itself will be returned as a second value."
   (check-type passphrase string)
   (check-type usage loom-loc)
   (check-type name string)
@@ -1016,87 +1108,107 @@ Return the location of the new wallet."
 
   (with-loom-transaction ()
     (let* ((location (passphrase-location passphrase t))
+           (real-location (if private-p (nth-value 1 (sha256 location)) location))
            (session (loom-loc-xor location *one*))
            (already-tokens (grid-touch *zero* usage t t))
            (tokens (if usage-source usage-qty already-tokens)))
       (assert (or (< already-tokens 0) (>= tokens 100)) nil
               "Must provide at least 100 usage tokens to new account.")
-      (unless (and (or (equal location usage) (grid-vacant-p *zero* location))
-                   (archive-vacant-p location))
+      (unless (and (or (equal real-location usage)
+                       (grid-vacant-p *zero* real-location))
+                   (archive-vacant-p real-location))
         (error "Passphrase location already in use."))
       (when usage-source
         (unless (> already-tokens 0)
           (grid-buy *zero* usage usage-source t)
           (unless (>= already-tokens usage-qty)
             (grid-move *zero* (- usage-qty already-tokens) usage-source usage))))
-      (archive-buy session usage t)
-      ;; Can't log in without a session, stored in the archive
-      ;; The session value is written at the wallet location xor 1
-      ;; The wallet location is written at the session value
-      (let ((session-value (random-loc)))
-        (archive-write session session-value usage)
-        (archive-buy session-value usage t)
-        (archive-write session-value location usage))
-      (archive-buy location usage t)
+      (unless private-p
+        (archive-buy session usage t)
+        ;; Can't log in without a session, stored in the archive
+        ;; The session value is written at the wallet location xor 1
+        ;; The wallet location is written at the session value
+        (let ((session-value (random-loc)))
+          (archive-write session session-value usage)
+          (archive-buy session-value usage t)
+          (archive-write session-value location usage)))
+      (archive-buy real-location usage t)
       (when sponsor-name
         (push (make-location :name sponsor-name :loc usage)
               locations))
-      (setf (get-wallet location nil usage)
-            (make-wallet :assets
-                         (cons (make-asset :name "usage tokens" :id *zero*) assets)
-                         :locations
-                         (cons (make-location :name name :loc location)
-                               locations)
-                         :recording-p t))
+      (let ((wallet (make-wallet
+                     :assets
+                     (cons (make-asset :name "usage tokens" :id *zero*) assets)
+                     :locations
+                     (cons (make-location :name name :loc real-location)
+                           locations)
+                     :recording-p t)))
+        (setf (get-wallet location nil usage private-p) wallet))
       (unless (< already-tokens 0)
-        (grid-buy *zero* location usage t)
-        (grid-move *zero* (grid-touch *zero* usage) usage location))
-      location)))
+        (grid-buy *zero* real-location usage t)
+        (grid-move *zero* (grid-touch *zero* usage) usage real-location))
+      real-location))) 
 
-(defun move-wallet (location new-passphrase &optional location-is-passphrase-p)
+(defun move-wallet (location new-passphrase &key
+                    location-is-passphrase-p
+                    old-private-p
+                    new-private-p)
   "Move a Loom wallet from LOCATION on *LOOM-SERVER* to NEW-PASSPHRASE.
-LOCATION is a passphrase if LOCATION-IS-PASSPHRASE-P is true."
+LOCATION is a passphrase if LOCATION-IS-PASSPHRASE-P is true.
+If OLD-PRIVATE-P is true, the old wallet is private.
+If NEW-PRIVATE-P is true, the new wallet will be private."
   (check-type location string)
   (check-type new-passphrase string)
   (with-loom-transaction ()
     (setf location (passphrase-location location location-is-passphrase-p))
-    (grid-touch *zero* location)
-    (let* ((wallet (get-wallet location))
-           (my-location (find location (wallet-locations wallet)
+    (let* ((real-location (if old-private-p
+                              (nth-value 1 (sha256 location))
+                              location))
+           (wallet (get-wallet location nil nil old-private-p))
+           (my-location (find real-location (wallet-locations wallet)
                               :test #'equal
                               :key #'location-loc))
            (asset-ids (delete *zero* (mapcar #'asset-id (wallet-assets wallet))
                               :test #'equal))
-           (session (loom-loc-xor location *one*))
-           (session-value (archive-touch session))
+           (session (unless old-private-p (loom-loc-xor location *one*)))
+           (session-value (and session (ignore-errors (archive-touch session))))
            (new-location (passphrase-location new-passphrase t))
-           (new-session (loom-loc-xor new-location *one*)))
-      (unless (and (grid-vacant-p *zero* new-location)
-                   (archive-vacant-p new-location))
+           (real-new-location (if new-private-p
+                                  (nth-value 1 (sha256 new-location))
+                                  new-location))
+           (new-session (unless new-private-p (loom-loc-xor new-location *one*))))
+      (grid-touch *zero* real-location)
+      (unless (and (grid-vacant-p *zero* real-new-location)
+                   (archive-vacant-p real-new-location))
         (error "New passphrase location already in use."))
       (unless my-location
         (error "Can't find wallet name."))
-      (setf (location-loc my-location) new-location)
-      (archive-touch session-value)
-      (archive-write location "" location)
-      (archive-sell location location)
-      (archive-write session "" location)
-      (archive-sell session location)
+      (setf (location-loc my-location) real-new-location)
+      (unless old-private-p
+        (when session-value
+          (archive-touch session-value))
+        (archive-write session "" real-location)
+        (archive-sell session real-location))
+      (archive-write real-location "" real-location)
+      (archive-sell real-location real-location)
       (dolist (asset-id asset-ids)
-        (let ((value (grid-touch asset-id location t)))
+        (let ((value (grid-touch asset-id real-location t)))
           (unless (zerop value)
-            (grid-buy asset-id new-location location)
-            (grid-move asset-id value location new-location)
-            (grid-sell asset-id location location))))
-      (grid-buy *zero* new-location location)
-      (grid-move *zero* (grid-touch *zero* location) location new-location)
-      (grid-sell *zero* location new-location)
-      (archive-buy new-location new-location)
-      (setf (get-wallet new-location) wallet)
-      (archive-buy new-session new-location)
-      (archive-write new-session session-value new-location)
-      (archive-write session-value new-location new-location)
-      new-location)))
+            (grid-buy asset-id real-new-location real-location)
+            (grid-move asset-id value real-location real-new-location)
+            (grid-sell asset-id real-location real-location))))
+      (grid-buy *zero* real-new-location real-location)
+      (grid-move *zero* (grid-touch *zero* real-location)
+                 real-location real-new-location)
+      (grid-sell *zero* real-location real-new-location)
+      (archive-buy real-new-location real-new-location)
+      (setf (get-wallet new-location nil nil new-private-p) wallet)
+      (when new-session
+        (archive-buy new-session new-location)
+        (when session-value
+          (archive-write new-session session-value new-location)
+          (archive-write session-value new-location new-location)))
+      real-new-location)))
 
 (defun initialize-usage-issuer (location &optional is-passphrase-p)
   "Move the usage token issuer to LOCATION in a new database.
@@ -1107,7 +1219,6 @@ Return the location."
   (grid-buy *zero* location *zero*)
   (grid-issuer *zero* *zero* location)
   location)
-
 
 (defun initialize-new-store (admin-passphrase &key
                              (name "Server Admin") assets locations)

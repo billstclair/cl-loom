@@ -9,4 +9,5 @@ branch=${branch:2}
 
 echo "Pushing $branch"
 git push origin $branch
+git push zippy $branch
 git push ok $branch

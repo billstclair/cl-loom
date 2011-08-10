@@ -83,6 +83,7 @@
            archive-write
 
            random-loc
+           sha256-function
            sha256
            grid-hash
            archive-hash
@@ -97,6 +98,7 @@
            loom-passphrase
            passphrase-location
            get-wallet
+           get-private-wallet
            wallet
            wallet-assets
            wallet-locations

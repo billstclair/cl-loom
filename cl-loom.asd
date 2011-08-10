@@ -9,13 +9,23 @@
 
 (defparameter *cl-loom-source-file* *load-truename*)
 
+(setf asdf:*central-registry*
+       (adjoin (truename
+                (merge-pathnames
+                 (make-pathname :directory '(:relative "cl-crypto")
+                                :name :unspecific
+                                :type :unspecific)
+                 *cl-loom-source-file*))
+               asdf:*central-registry*
+               :test #'equal))
+
 (asdf:defsystem :cl-loom
   :description "Client for Patrick Chkoreff's Loom.cc digital asset trading system."
   :author "Bill St. Clair <billstclair@rayservers.net>"
   :version "0.5"
   :license "Apache"
   :depends-on (anaphora alexandria drakma split-sequence flexi-streams
-                        closer-mop trivial-garbage)
+                        closer-mop trivial-garbage cl-crypto)
   :components
   ((:module source
     :serial t

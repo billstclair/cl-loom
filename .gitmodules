@@ -1,3 +1,7 @@
 [submodule "Loom"]
 	path = Loom
-	url = zippy.rayservers.com:/home/lisp/git/Loom.git
+	url = git://github.com/chkoreff/Loom.git
+
+[submodule "cl-crypto"]
+	path = cl-crypto
+	url = git://github.com/billstclair/cl-crypto.git
