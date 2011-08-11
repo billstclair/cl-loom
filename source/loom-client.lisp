@@ -508,7 +508,7 @@ balance of 0 (-1), move it to *ZERO*."
 (defun parse-value (string &optional raw-negatives-p)
   (adjust-negative (parse-integer string) raw-negatives-p))
 
-(defun grid-touch (asset-type location &optional zero-if-vacant-p raw-negatives-p)
+(defun grid-touch (asset-type location &optional no-error-p raw-negatives-p)
   "Query the value of ASSET-TYPE at LOCATION.
 If vacant, signal an error unless ZERO-IF-VACANT-P is true.
 If raw-negatives-p is true, don't increment by one negative values.
@@ -518,13 +518,15 @@ Returns two values:
   (check-type asset-type loom-loc)
   (check-type location loom-loc)
   (let* ((*skip-response-error-check*
-          (or zero-if-vacant-p *skip-response-error-check*))
+          (or no-error-p *skip-response-error-check*))
          (res (grid-request :touch :type asset-type :loc location)))
-    (cond ((and zero-if-vacant-p
+    (cond ((and no-error-p
                 (equal "fail" (kv-lookup "status" res)))
            (unless (equal "vacant" (kv-lookup "error_loc" res))
              (maybe-signal-loom-error res))
-           (values 0 res))
+           ;; Return -1 for issuer locations when raw-negatives-p is true
+           (cond ((string= *zero* location) (values (if raw-negatives-p -1 0) res))
+                 (t (values 0 res))))
           (t (values
               (parse-value (kv-lookup "value" res) raw-negatives-p)
               res)))))
@@ -594,11 +596,14 @@ Result isn't yet parsed. Do that when you need this function."
   "Create a new asset of type ASSET-TYPE at ISSUER-LOC.
 Use usage tokens from USAGE, default: ISSUER-LOC."
   (let* ((type (if (typep asset-type 'loom-loc)
-                   asset-type (random-vacant-asset-type))))
-    (grid-buy type issuer-loc usage t)
+                   asset-type (random-vacant-asset-type)))
+         (issuer (if (typep issuer-loc 'loom-loc)
+                     issuer-loc (random-vacant-grid-loc type))))
+    (grid-buy type issuer usage t)
     (grid-buy type *zero* usage t)
-    (grid-issuer type *zero* issuer-loc)
-    (grid-sell type *zero* usage)))
+    (grid-issuer type *zero* issuer)
+    (grid-sell type *zero* usage)
+    (values type issuer)))
 
 (defun destroy-asset (asset-type issuer-loc &optional (usage issuer-loc))
   (grid-buy asset-type *zero* usage t)
