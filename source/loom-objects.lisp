@@ -405,10 +405,7 @@ Uses the values from *loom-store*"
 ;;; ============================================================================
 
 (defparameter *root-location-file*
-  (merge-pathnames
-   (make-pathname :name "root-location"
-                  :type "sexp")
-   cl-user::*cl-loom-source-file*))
+  (asdf:system-relative-pathname "cl-loom" "root-location.sexp"))
 
 ;;; ----------------------------------------------------------------------------
 

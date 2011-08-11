@@ -7,18 +7,6 @@
 ;;; For now, just a client of Patrick Chkoreff's perl code.
 ;;;
 
-(defparameter *cl-loom-source-file* *load-truename*)
-
-(setf asdf:*central-registry*
-       (adjoin (truename
-                (merge-pathnames
-                 (make-pathname :directory '(:relative "cl-crypto")
-                                :name :unspecific
-                                :type :unspecific)
-                 *cl-loom-source-file*))
-               asdf:*central-registry*
-               :test #'equal))
-
 (asdf:defsystem :cl-loom
   :description "Client for Patrick Chkoreff's Loom.cc digital asset trading system."
   :author "Bill St. Clair <billstclair@rayservers.net>"
@@ -36,6 +24,17 @@
      (:file "loom-client")
      (:file "loom-objects")
      ))))
+
+(unless (ignore-errors (ql:quickload "cl-autorepo"))
+  (let ((dir "~/lisp")
+        (url "https://github.com/billstclair/cl-autorepo"))
+    (asdf:run-shell-command "mkdir -p ~a;cd ~a;git clone ~a" dir dir url))
+  (load "~/lisp/cl-autorepo/cl-autorepo.asd")
+  (ql:quickload "cl-autorepo"))
+
+(cl-autorepo:add-system
+ "cl-crypto" "https://github.com/billstclair/cl-crypto" :git)
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;

@@ -1,7 +1,3 @@
 [submodule "Loom"]
 	path = Loom
 	url = git://github.com/chkoreff/Loom.git
-
-[submodule "cl-crypto"]
-	path = cl-crypto
-	url = git://github.com/billstclair/cl-crypto.git

@@ -15,10 +15,7 @@
 ;;; ----------------------------------------------------------------------------
 
 (defparameter *configuration-file*
-  (merge-pathnames
-   (make-pathname :name "configuration"
-                  :type "sexp")
-   cl-user::*cl-loom-source-file*))
+  (asdf:system-relative-pathname "cl-loom" "configuration.sexp"))
 
 (defparameter *configuration*
   (let ((path *configuration-file*))
@@ -45,11 +42,7 @@ or when no configuration.sexp file is found.")
 
 (defun loom-server-base-dir ()
   "Return a path to the local loom server base directory"
-  (merge-pathnames
-   (make-pathname :directory '(:relative "Loom")
-                  :name :unspecific
-                  :type :unspecific)
-   cl-user::*cl-loom-source-file*))
+  (asdf:system-relative-pathname "cl-loom" "Loom/"))
 
 (defun make-configuration (&key
                            (hostname "127.0.0.1")
@@ -310,6 +303,13 @@ the loom.cc server."
 
 (defvar *attempting-loom-server-startup* nil)
 
+(defun load-loom-perl ()
+  (let ((code-dir (asdf:system-relative-pathname "cl-loom" "Loom/code/"))
+        (dir (asdf:system-relative-pathname "cl-loom" "./")))
+    (unless (probe-file code-dir)
+      (let ((script (asdf:system-relative-pathname "cl-loom" "git-submodule-init")))
+        (asdf:run-shell-command "cd '~a';~a" dir (truename script))))))
+
 (defun attempt-loom-server-startup (&optional (initialize-p t))
   "See https://github.com/billstclair/Loom/wiki/Config"
   (with-server-bound (*loom-server*)
@@ -320,6 +320,8 @@ the loom.cc server."
     (let* ((*configuration* (config-of server))
            (config-dir (config-path 'config-dir))
            (binary-pathname (config-path 'binary-path)))
+      (when (and config-dir (not (probe-file config-dir)))
+        (load-loom-perl))
       (assert (and config-dir (pathnamep config-dir) (probe-file config-dir)
                    binary-pathname (pathnamep binary-pathname)
                    (probe-file binary-pathname))

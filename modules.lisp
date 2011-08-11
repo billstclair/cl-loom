@@ -29,9 +29,6 @@
             "loom-objects"
 	    )))
 
-(in-package :cl-user)
-
-(defparameter *cl-loom-source-file* *load-truename*)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
