@@ -25,7 +25,8 @@
      (:file "loom-objects")
      ))))
 
-(unless (ignore-errors (ql:quickload "cl-autorepo"))
+(unless (or (find-package :cl-autorepo)
+            (ignore-errors (ql:quickload "cl-autorepo")))
   (let* ((dir "~/.local/share/common-lisp/source/")
          (autorepo-asd (merge-pathnames "cl-autorepo/cl-autorepo.asd" dir))
          (url "https://github.com/billstclair/cl-autorepo"))
