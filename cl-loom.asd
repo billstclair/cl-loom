@@ -26,11 +26,12 @@
      ))))
 
 (unless (ignore-errors (ql:quickload "cl-autorepo"))
-  (let ((dir "~/lisp")
-        (url "https://github.com/billstclair/cl-autorepo"))
-    (asdf:run-shell-command "mkdir -p ~a;cd ~a;git clone ~a" dir dir url))
-  (load "~/lisp/cl-autorepo/cl-autorepo.asd")
-  (ql:quickload "cl-autorepo"))
+  (let* ((dir "~/.local/share/common-lisp/source/")
+         (autorepo-asd (merge-pathnames "cl-autorepo/cl-autorepo.asd" dir))
+         (url "https://github.com/billstclair/cl-autorepo"))
+    (asdf:run-shell-command "mkdir -p ~a;cd ~a;git clone ~a" dir dir url)
+    (load autorepo-asd)
+    (ql:quickload "cl-autorepo")))
 
 (cl-autorepo:add-system
  "cl-crypto" "https://github.com/billstclair/cl-crypto" :git)
