@@ -28,8 +28,8 @@
 
 (defparameter *default-configuration*
   '(loom-configuration
-    (hostname "loom.cc")
-    (port 9090)
+    (hostname "secure.loom.cc")
+    (port 443)
     (path "/")
     (use-ssl t)
     (local nil)
@@ -447,7 +447,7 @@ the loom.cc server."
   (request "trans/cancel"))
 
 (defun grid-request (op &rest args)
-  (apply #'request nil :function :grid :action op args))
+  (apply #'request "grid" :action op args))
 
 (deftype loom-loc ()
   '(string 32))
@@ -612,7 +612,7 @@ Use usage tokens from USAGE, default: ISSUER-LOC."
   (grid-sell asset-type *zero* usage))
 
 (defun archive-request (op &rest args)
-  (apply #'request nil :function :archive :action op args))
+  (apply #'request "archive" :action op args))
 
 (defun archive-buy (location usage &optional ignore-if-occupied-p)
   "Buy grid storage at LOCATION. Pay for it with one token from USAGE
@@ -700,7 +700,7 @@ second value from ARCHIVE-TOUCH or ARCHIVE-LOOK."
 
 (defun random-loc ()
   "Return a random LOOM location, as a 32-character hex number."
-  ;;(kv-lookup "value" (request nil :function :random))
+  ;;(kv-lookup "value" (request "random"))
   (string-downcase (format nil "~32,'0x" (cl-crypto:get-random-bits 128))))
 
 (defvar *sha256-function* nil)
@@ -725,7 +725,7 @@ Requires *loom-server* to be bound, unless you set a local function with (setf s
         (values res (fold-hash res)))))
 
 (defun sha256-internal (string)
-  (let ((res (request nil :function :hash :input string)))
+  (let ((res (request "hash" :input string)))
     (values (kv-lookup "sha256_hash" res)
             (kv-lookup "folded_hash" res)
             res)))
