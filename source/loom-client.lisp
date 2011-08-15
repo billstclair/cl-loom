@@ -917,7 +917,7 @@ If LOCATION-LIST is a WALLET instance, search its WALLET-LOCATIONS."
    (string #\newline)))
 
 (defun parse-wallet-string (string)
-  (unless (eql 0 (search *loom-folder-header* string :test #'string=))
+  (unless (eql 0 (search *loom-folder-header* string :test #'string-equal))
     (error "Missing loom folder header in: ~s" string))
   (let* ((alist (parse-kv (subseq string (length *loom-folder-header*))))
          (locs (split-sequence:split-sequence #\space (kv-lookup "list_loc" alist)
