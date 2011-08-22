@@ -104,6 +104,8 @@
            wallet-locations
            wallet-recording-p
            wallet-history
+           wallet-properties
+           wallet-get-property
            asset
            make-asset
            asset-name

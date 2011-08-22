@@ -846,11 +846,13 @@ Content-type: loom/folder
   name
   scale
   precision
-  id)
+  id
+  disabled-p)
 
 (defstruct location
   name
-  loc)
+  loc
+  disabled-p)
 
 (defstruct history
   hash
@@ -865,7 +867,22 @@ Content-type: loom/folder
   assets
   locations
   recording-p
-  history)
+  history
+  properties)
+
+(defun wallet-get-property (wallet property)
+  (check-type wallet wallet)
+  (setf property (downcase-princ-to-string property))
+  (cdr (assoc property (loom-wallet-properties wallet) :test #'equal)))
+
+(defun (setf wallet-get-property) (value wallet property)
+  (check-type value string)
+  (check-type wallet wallet)
+  (setf property (downcase-princ-to-string property))
+  (let ((cell (assoc property (loom-wallet-properties wallet) :test #'equal)))
+    (if cell
+        (setf (cdr cell) value)
+        (push (cons property value) (wallet-properties wallet)))))
 
 (defun find-asset (name asset-list &optional return-id-p)
   "Find the asset named NAME in ASSET-LIST.
@@ -916,6 +933,22 @@ If LOCATION-LIST is a WALLET instance, search its WALLET-LOCATIONS."
    (string #\newline)
    (string #\newline)))
 
+;; Return an alist of all the unhandled wallet properties in alist
+(defun filter-wallet-properties (alist)
+  (loop for (key . value) in alist
+       unless (or (member key '("list_loc" "list_type" "list_H") :test #'equal)
+                  (eql 0 (search "loc_name." key :test #'equal))
+                  (eql 0 (search "loc_disable." key :test #'equal))
+                  (eql 0 (search "type_name." key :test #'equal))
+                  (eql 0 (search "type_scale." key :test #'equal))
+                  (eql 0 (search "type_min_precision." key :test #'equal))
+                  (eql 0 (search "type_disable." key :test #'equal))
+                  (eql 0 (search "H_time." key :test #'equal))
+                  (eql 0 (search "H_qty." key :test #'equal))
+                  (eql 0 (search "H_loc." key :test #'equal))
+                  (eql 0 (search "H_memo." key :test #'equal)))
+       collect (cons key value)))
+
 (defun parse-wallet-string (string)
   (unless (eql 0 (search *loom-folder-header* string :test #'string-equal))
     (error "Missing loom folder header in: ~s" string))
@@ -926,13 +959,17 @@ If LOCATION-LIST is a WALLET instance, search its WALLET-LOCATIONS."
                                                :remove-empty-subseqs t))
          (recording (kv-lookup "recording" alist))
          (hs (split-sequence:split-sequence #\space (kv-lookup "list_H" alist)
-                                            :remove-empty-subseqs t)))
+                                            :remove-empty-subseqs t))
+         (properties (filter-wallet-properties alist)))
     (make-wallet
      :locations
      (loop for loc in locs
         collect
           (make-location :name (kv-lookup (format nil "loc_name.~a" loc) alist)
-                         :loc loc))
+                         :loc loc
+                         :disabled-p (not (null (kv-lookup
+                                                 (format nil "loc_disable.~a" loc)
+                                                 alist)))))
      :assets
      (loop for id in types
         collect
@@ -942,7 +979,10 @@ If LOCATION-LIST is a WALLET instance, search its WALLET-LOCATIONS."
                       :precision (awhen (kv-lookup (format nil "type_min_precision.~a" id)
                                                    alist)
                                    (parse-integer it))
-                      :id id))
+                      :id id
+                      :disabled-p (not (null (kv-lookup
+                                              (format nil "type_disable.~a" id)
+                                              alist)))))
      :recording-p (equal recording "1")
      :history
      (loop for hash in hs
@@ -953,7 +993,8 @@ If LOCATION-LIST is a WALLET instance, search its WALLET-LOCATIONS."
            :qty (kv-lookup (format nil "H_qty.~a" hash) alist)
            :type (kv-lookup (format nil "H_type.~a" hash) alist)
            :loc (kv-lookup (format nil "H_loc.~a" hash) alist)
-           :memo (kv-lookup (format nil "H_memo.~a" hash) alist))))))
+           :memo (kv-lookup (format nil "H_memo.~a" hash) alist)))
+     :properties properties)))
 
 (defun wallet-string (wallet)
   (check-type wallet wallet)
@@ -988,6 +1029,8 @@ If LOCATION-LIST is a WALLET instance, search its WALLET-LOCATIONS."
             (pushit (history-type history) "H_type.~a" hash)
             (pushit (history-loc history) "H_loc.~a" hash)
             (pushit (history-memo history) "H_memo.~a" hash))))
+      (loop for (key . value) in (wallet-properties wallet)
+           do (push (cons key value) alist))
       (concatenate 'string *loom-folder-header* (alist-to-kv-string (nreverse alist))))))
 
 (defun loom-passphrase-p (string)
