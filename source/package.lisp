@@ -72,6 +72,7 @@
            #:grid-look
            #:grid-move
            #:grid-scan
+           #:grid-scan-wallet
            #:create-asset
            #:destroy-asset
            
@@ -141,6 +142,7 @@
            #:remove-asset
            
            #:format-loom-qty
+           #:format-loom-qty-from-asset
            #:unformat-loom-qty
            
            ;; loom-objects.lisp

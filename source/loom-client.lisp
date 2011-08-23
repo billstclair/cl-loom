@@ -596,7 +596,7 @@ If RAW-NEGATIVES-P is true, don't adjust negative values by adding 1"
      kv)))     
 
 ;; Still need to parse (("loc/L" . "qty:id qty:id ...") ...) pairs and return
-;; an alist: ((L (qty . id) (qty . id)) ...)
+;; an alist: ((L (id . qty) (id . qty)) ...)
 (defun grid-scan (locs types &optional zeroes-p)
   "Scans all the locations in the LOCS list for all the asset-types  in the TYPES list.
 Returns zero values if zeroes-p is included and true.
@@ -608,6 +608,31 @@ Result isn't yet parsed. Do that when you need this function."
     (if zeroes-p
         (grid-request :scan :locs locs-string :types types-string :zeroes 1)
         (grid-request :scan :locs locs-string :types types-string))))
+
+;; Scans all active locations and types in wallet, and returns an alist:
+;; ((location (id . qty) (id . qty) ...) ...)
+;; The QTY values are all shifted as specified by the wallet locations'
+;; scales and precisions.
+;; To do: Handle greater that 2048 combinations, Loom's max for one call.
+(defun grid-scan-wallet (wallet)
+  (check-type wallet wallet)
+  (let* ((locs (loop for loc in (wallet-locations wallet)
+                  collect (location-loc loc)))
+         (assets (wallet-assets wallet))
+         (types (loop for asset in assets
+                     collect (asset-id asset)))
+         (alist (grid-scan locs types)))
+    (loop for (key . values) in alist
+       when (eql 0 (search "loc/" key :test #'string-equal))
+       collect
+         (cons (subseq key 4)
+               (loop for val/id in (split-sequence:split-sequence #\space values)
+                  for (val id) = (split-sequence:split-sequence #\: val/id)
+                  for asset = (find id assets :test #'equal :key #'asset-id)
+                  for num = (if asset
+                                (format-loom-qty-from-asset val asset)
+                                val)
+                  collect (cons id num))))))
 
 (defun create-asset (asset-type issuer-loc &optional (usage issuer-loc))
   "Create a new asset of type ASSET-TYPE at ISSUER-LOC.
@@ -1349,13 +1374,15 @@ Credit usage tokens to USAGE, default LOCATION."
   (check-type integer (integer 0 *))
   (check-type scale (or null (integer 0 *)))
   (check-type precision (or null (integer 0 *)))
-  (if (or (null scale) (eql scale 0))
-      integer
+  (if (and (or (null precision) (eql precision 0))
+           (or (null scale) (eql scale 0)))
+      (format nil "~d" integer)
       (let* ((str (format nil "~v,'0d" (1+ scale) integer))
              (len (length str))
              (left-len (- len scale))
-             (cutoff (and precision (max 0 (- scale precision))))
-             (i (1- len)))
+             (cutoff (and precision (max 0 (- len left-len precision))))
+             (i (1- len))
+             left right)
         (when cutoff
           (loop for j from 0 below cutoff
              for ch = (elt str i)
@@ -1363,9 +1390,28 @@ Credit usage tokens to USAGE, default LOCATION."
                (unless (eql ch #\0) (return))
                (decf i)))
         (if (< i left-len)
-            (subseq str 0 left-len)
-            (concatenate
-             'string (subseq str 0 left-len) "." (subseq str left-len (1+ i)))))))
+            (setf left (subseq str 0 left-len)
+                  right "")
+            (setf left (subseq str 0 left-len)
+                  right (subseq str left-len (1+ i))))
+        (let ((end-cnt (and precision (max 0 (- precision (length right))))))
+          (concatenate 'string left "." right
+                       (if end-cnt
+                           (make-string end-cnt :initial-element #\0)
+                           ""))))))
+
+(defun format-loom-qty-from-asset (qty asset)
+  "Turn a loom QTY into a printable string, using scale & precision from ASSET."
+  (check-type qty (or string integer))
+  (check-type asset asset)
+  (let* ((scale (asset-scale asset))
+         (precision (asset-precision asset))
+         (x (if (integerp qty) qty (parse-integer qty)))
+         (negative-p (and (< x 0) (setf x (- 1 x))))
+         (res (format-loom-qty x scale precision)))
+    (if negative-p
+        (concatenate 'string "-" res)
+        res)))    
 
 (defun unformat-loom-qty (string scale)
   "Turn a decimal string, as returned by FORMAT-LOOM-QTY back into a Loom integer."
