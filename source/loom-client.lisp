@@ -65,6 +65,20 @@ to MAKE-LOOM-SERVER. Defaults are for a local server."
     (config-dir ,config-dir)
     (binary-path ,binary-path)))
 
+(defun make-uri-configuration (uri-string)
+  (let* ((uri (puri:parse-uri uri-string))
+         (https-p (eq :https (puri:uri-scheme uri))))
+    (make-configuration
+     :hostname (puri:uri-host uri)
+     :port (or (puri:uri-port uri)
+               (if https-p 443 80))
+     :path (or (puri:uri-path uri) "/")
+     :use-ssl https-p
+     :local nil
+     :base-dir nil
+     :config-dir nil
+     :binary-path nil)))
+
 ;;; ----------------------------------------------------------------------------
 ;;; Configuration functions
 ;;; ----------------------------------------------------------------------------
@@ -174,6 +188,9 @@ the loom.cc server."
     ((eq config t)
      (make-instance 'loom-server :default-setup-p t))
     (t (make-instance 'loom-server))))
+
+(defun make-loom-uri-server (uri-string)
+  (make-loom-server (make-uri-configuration uri-string)))
 
 ;; KV format examples: https://secure.loom.cc/?function=archive_tutorial&help=1
 ;; (

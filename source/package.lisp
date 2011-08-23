@@ -37,7 +37,9 @@
            #:base-uri-of
            #:setup-of
            #:make-configuration
+           #:make-uri-configuration
            #:make-loom-server
+           #:make-loom-uri-server
 
            #:loom-server-setup
            #:make-loom-server-setup
