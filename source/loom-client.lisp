@@ -852,7 +852,8 @@ Content-type: loom/folder
 (defstruct location
   name
   loc
-  disabled-p)
+  disabled-p
+  wallet-p)
 
 (defstruct history
   hash
@@ -873,13 +874,13 @@ Content-type: loom/folder
 (defun wallet-get-property (wallet property)
   (check-type wallet wallet)
   (setf property (downcase-princ-to-string property))
-  (cdr (assoc property (loom-wallet-properties wallet) :test #'equal)))
+  (cdr (assoc property (wallet-properties wallet) :test #'equal)))
 
 (defun (setf wallet-get-property) (value wallet property)
   (check-type value string)
   (check-type wallet wallet)
   (setf property (downcase-princ-to-string property))
-  (let ((cell (assoc property (loom-wallet-properties wallet) :test #'equal)))
+  (let ((cell (assoc property (wallet-properties wallet) :test #'equal)))
     (if cell
         (setf (cdr cell) value)
         (push (cons property value) (wallet-properties wallet)))))
@@ -969,7 +970,8 @@ If LOCATION-LIST is a WALLET instance, search its WALLET-LOCATIONS."
                          :loc loc
                          :disabled-p (not (null (kv-lookup
                                                  (format nil "loc_disable.~a" loc)
-                                                 alist)))))
+                                                 alist)))
+                         :wallet-p (equal loc (car locs))))
      :assets
      (loop for id in types
         collect
