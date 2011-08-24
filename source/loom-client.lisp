@@ -1086,13 +1086,16 @@ If LOCATION-LIST is a WALLET instance, search its WALLET-LOCATIONS."
 (deftype loom-passphrase ()
   '(satisfies loom-passphrase-p))
 
-(defun passphrase-location (location &optional is-passphrase-p)
-  (cond (is-passphrase-p
-         (check-type location loom-passphrase)
-         (nth-value 1 (sha256 location)))
-        (t
-         (check-type location loom-loc)
-         location)))
+(defun passphrase-location (location &optional is-passphrase-p private-p)
+  (let ((res (cond (is-passphrase-p
+                    (check-type location loom-passphrase)
+                    (nth-value 1 (sha256 location)))
+                   (t
+                    (check-type location loom-loc)
+                    location))))
+    (if private-p
+        (values (nth-value 1 (sha256 res)) res)
+        res)))
 
 (defun get-wallet (location &optional is-passphrase-p usage private-p)
   "Fetch, parse, and return, as a LOOM:WALLET instance, the loom wallet for LOCATION.
@@ -1137,7 +1140,7 @@ Defaults to LOCATION."
          (iv-and-value (split-sequence:split-sequence #\| string))
          (iv (cl-base64:base64-string-to-usb8-array (first iv-and-value))))
     (cl-crypto:aes-decrypt-to-string
-     (second iv-and-value) passphrase :iv  iv)))
+     (second iv-and-value) passphrase :iv iv)))
 
 (defun decrypt-wallet-from-location (wallet-string location)
   (parse-wallet-string (decrypt-string-from-location wallet-string location)))
@@ -1148,10 +1151,10 @@ for LOCATION, as saved by (SETF GET-PRIVATE-WALLET)
 If IS-PASSPHRASE-P is true, LOCATION is a passphrase, not a location.
 USAGE ignored here, but used by setf method."
   (declare (ignore usage))
-  (setf location (passphrase-location location is-passphrase-p))
-  (let* ((hashed-location (nth-value 1 (sha256 location)))
-         (value (archive-touch hashed-location)))
-    (values (decrypt-wallet-from-location value location) hashed-location)))
+  (multiple-value-bind (hashed-location location)
+      (passphrase-location location is-passphrase-p t)
+    (let* ((value (archive-touch hashed-location)))
+      (values (decrypt-wallet-from-location value location) hashed-location))))
 
 (defun (setf get-private-wallet) (wallet location &optional is-passphrase-p usage)
   "Save WALLET, a LOOM-WALLET:WALLET instance, encrypted with LOCATION,
