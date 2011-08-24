@@ -1407,7 +1407,7 @@ Credit usage tokens to USAGE, default LOCATION."
   (let* ((scale (asset-scale asset))
          (precision (asset-precision asset))
          (x (if (integerp qty) qty (parse-integer qty)))
-         (negative-p (and (< x 0) (setf x (- 1 x))))
+         (negative-p (and (< x 0) (setf x (- -1 x))))
          (res (format-loom-qty x scale precision)))
     (if negative-p
         (concatenate 'string "-" res)
