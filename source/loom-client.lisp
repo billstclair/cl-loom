@@ -617,10 +617,12 @@ Result isn't yet parsed. Do that when you need this function."
 (defun grid-scan-wallet (wallet)
   (check-type wallet wallet)
   (let* ((locs (loop for loc in (wallet-locations wallet)
+                  unless (location-disabled-p loc)
                   collect (location-loc loc)))
          (assets (wallet-assets wallet))
          (types (loop for asset in assets
-                     collect (asset-id asset)))
+                   unless (asset-disabled-p asset)
+                   collect (asset-id asset)))
          (alist (grid-scan locs types)))
     (loop for (key . values) in alist
        when (eql 0 (search "loc/" key :test #'string-equal))
