@@ -109,6 +109,8 @@
            #:wallet-history
            #:wallet-properties
            #:wallet-get-property
+           #:parse-wallet-string
+           #:wallet-string
            #:asset
            #:make-asset
            #:asset-name
