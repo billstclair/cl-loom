@@ -117,6 +117,7 @@
            #:asset-scale
            #:asset-precision
            #:asset-id
+           #:asset-disabled-p
            #:location
            #:make-location
            #:location-name

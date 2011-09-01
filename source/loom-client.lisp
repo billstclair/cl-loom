@@ -614,12 +614,13 @@ Result isn't yet parsed. Do that when you need this function."
 ;; The QTY values are all shifted as specified by the wallet locations'
 ;; scales and precisions.
 ;; To do: Handle greater that 2048 combinations, Loom's max for one call.
-(defun grid-scan-wallet (wallet)
+(defun grid-scan-wallet (wallet &key
+                         (locations (wallet-locations wallet))
+                         (assets (wallet-assets wallet)))
   (check-type wallet wallet)
-  (let* ((locs (loop for loc in (wallet-locations wallet)
+  (let* ((locs (loop for loc in locations
                   unless (location-disabled-p loc)
                   collect (location-loc loc)))
-         (assets (wallet-assets wallet))
          (types (loop for asset in assets
                    unless (asset-disabled-p asset)
                    collect (asset-id asset)))
