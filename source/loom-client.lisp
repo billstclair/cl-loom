@@ -615,14 +615,14 @@ Result isn't yet parsed. Do that when you need this function."
 ;; scales and precisions.
 ;; To do: Handle greater that 2048 combinations, Loom's max for one call.
 (defun grid-scan-wallet (wallet &key
-                         (locations (wallet-locations wallet))
-                         (assets (wallet-assets wallet)))
+                         (locations (wallet-locations wallet) locations-p)
+                         (assets (wallet-assets wallet) assets-p))
   (check-type wallet wallet)
   (let* ((locs (loop for loc in locations
-                  unless (location-disabled-p loc)
+                  unless (and (not locations-p) (location-disabled-p loc))
                   collect (location-loc loc)))
          (types (loop for asset in assets
-                   unless (asset-disabled-p asset)
+                   unless (and (not assets-p) (asset-disabled-p asset))
                    collect (asset-id asset)))
          (alist (grid-scan locs types)))
     (loop for (key . values) in alist
