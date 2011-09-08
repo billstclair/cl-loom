@@ -609,34 +609,6 @@ Result isn't yet parsed. Do that when you need this function."
         (grid-request :scan :locs locs-string :types types-string :zeroes 1)
         (grid-request :scan :locs locs-string :types types-string))))
 
-;; Scans all active locations and types in wallet, and returns an alist:
-;; ((location (id . qty) (id . qty) ...) ...)
-;; The QTY values are all shifted as specified by the wallet locations'
-;; scales and precisions.
-;; To do: Handle greater that 2048 combinations, Loom's max for one call.
-(defun grid-scan-wallet (wallet &key
-                         (locations (wallet-locations wallet) locations-p)
-                         (assets (wallet-assets wallet) assets-p))
-  (check-type wallet wallet)
-  (let* ((locs (loop for loc in locations
-                  unless (and (not locations-p) (location-disabled-p loc))
-                  collect (location-loc loc)))
-         (types (loop for asset in assets
-                   unless (and (not assets-p) (asset-disabled-p asset))
-                   collect (asset-id asset)))
-         (alist (grid-scan locs types)))
-    (loop for (key . values) in alist
-       when (eql 0 (search "loc/" key :test #'string-equal))
-       collect
-         (cons (subseq key 4)
-               (loop for val/id in (split-sequence:split-sequence #\space values)
-                  for (val id) = (split-sequence:split-sequence #\: val/id)
-                  for asset = (find id assets :test #'equal :key #'asset-id)
-                  for num = (if asset
-                                (format-loom-qty-from-asset val asset)
-                                val)
-                  collect (cons id num))))))
-
 (defun create-asset (asset-type issuer-loc &optional (usage issuer-loc))
   "Create a new asset of type ASSET-TYPE at ISSUER-LOC.
 Use usage tokens from USAGE, default: ISSUER-LOC."
@@ -1308,6 +1280,34 @@ If NEW-PRIVATE-P is true, the new wallet will be private."
           (archive-write new-session session-value new-location)
           (archive-write session-value new-location new-location)))
       real-new-location)))
+
+;; Scans all active locations and types in wallet, and returns an alist:
+;; ((location (id . qty) (id . qty) ...) ...)
+;; The QTY values are all shifted as specified by the wallet locations'
+;; scales and precisions.
+;; To do: Handle greater that 2048 combinations, Loom's max for one call.
+(defun grid-scan-wallet (wallet &key
+                         (locations (wallet-locations wallet) locations-p)
+                         (assets (wallet-assets wallet) assets-p))
+  (check-type wallet wallet)
+  (let* ((locs (loop for loc in locations
+                  unless (and (not locations-p) (location-disabled-p loc))
+                  collect (location-loc loc)))
+         (types (loop for asset in assets
+                   unless (and (not assets-p) (asset-disabled-p asset))
+                   collect (asset-id asset)))
+         (alist (grid-scan locs types)))
+    (loop for (key . values) in alist
+       when (eql 0 (search "loc/" key :test #'string-equal))
+       collect
+         (cons (subseq key 4)
+               (loop for val/id in (split-sequence:split-sequence #\space values)
+                  for (val id) = (split-sequence:split-sequence #\: val/id)
+                  for asset = (find id assets :test #'equal :key #'asset-id)
+                  for num = (if asset
+                                (format-loom-qty-from-asset val asset)
+                                val)
+                  collect (cons id num))))))
 
 (defun initialize-usage-issuer (location &optional is-passphrase-p)
   "Move the usage token issuer to LOCATION in a new database.
