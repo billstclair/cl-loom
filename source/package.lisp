@@ -94,9 +94,11 @@
            #:loom-loc-xor
            #:fold-hash
            #:string-to-hex
+           #:hex-to-string
            #:parse-hex
            #:print-hex
            #:make-asset-description
+           #:parse-asset-description
            
            #:loom-passphrase
            #:passphrase-location

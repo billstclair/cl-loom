@@ -813,14 +813,39 @@ Currently requires *loom-server* to be bound."
               (lambda (char) (format nil "~(~2,'0x~)" (char-code char)))
               string)))
 
+(defun hex-to-string (hex)
+  (let* ((len (length hex))
+         (res (make-string (or (and (evenp len) (/ len 2))
+                               (error "Odd-length hex string")))))
+    (loop for i from 0 below len by 2
+       for j from 0
+       for code = (parse-integer hex :start i :end (+ i 2) :radix 16.)
+       do (setf (aref res j) (code-char code)))
+    res))
+
 ;; From loom source: code/Loom/Web/Page_Asset.pm
 (defun make-asset-description (name asset-id scale precision)
+  (when (null scale) (setf scale ""))
+  (when (null precision) (setf precision ""))
   (let ((sans-hash (format nil "~ax~dx~dx~a" asset-id scale precision
                            (string-to-hex name))))
     (concatenate 'string
                  sans-hash
                  "x"
                  (subseq (loom:sha256 sans-hash) 0 8))))
+
+(defun parse-asset-description (description)
+  "Returns 4 values: name, asset-id, scale, and precision"
+  (destructuring-bind (asset-id scale precision hex-name hash)
+      (split-sequence:split-sequence #\x description)
+    (let* ((sans-hash (format nil "~ax~ax~ax~a" asset-id scale precision hex-name))
+           (computed-hash (subseq (loom:sha256 sans-hash) 0 8)))
+      (unless (equal computed-hash hash)
+        (error "Hash mismatch"))
+      (values (hex-to-string hex-name)
+              asset-id
+              (unless (equal scale "") (parse-integer scale))
+              (unless (equal precision "") (parse-integer precision))))))
 
 ;; The contents of a Loom Folder, pruned to one example of each type
 #||
