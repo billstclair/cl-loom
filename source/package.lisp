@@ -62,6 +62,8 @@
            #:loom-loc
            #:loom-hash
            
+           #:ssl-certificate-temp-dir
+
            #:grid-buy
            #:grid-sell
            #:*zero*
@@ -137,6 +139,7 @@
            #:find-asset
            #:find-asset-by-id
            #:find-location
+           #:find-location-by-loc
            
            #:initialize-usage-issuer
            #:initialize-new-store

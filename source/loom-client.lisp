@@ -40,6 +40,76 @@
 This is used only when :default-setup-p t is passed to (make-instance 'server ...)
 or when no configuration.sexp file is found.")
 
+(defparameter *rayservers-ca-certificate-filename*
+  "ca-rayservers-com.pem")
+
+(defparameter *rayservers-ca-certificate-path*
+  (merge-pathnames *rayservers-ca-certificate-filename*
+                   (asdf:system-source-directory :cl-loom)))
+
+(defun rayservers-ca-certificate-file-exists-p ()
+  (probe-file *rayservers-ca-certificate-path*))
+
+(defvar *rayservers-ca-certificate-installed-p* nil)
+
+(defparameter *rayservers-ca-asn1*
+    "-----BEGIN CERTIFICATE-----
+MIIElTCCA32gAwIBAgIJALoXNnj+yvJCMA0GCSqGSIb3DQEBBQUAMIGNMQswCQYD
+VQQGEwJQQTELMAkGA1UECBMCTkExFDASBgNVBAcTC1BhbmFtYSBDaXR5MRgwFgYD
+VQQKEw9SYXlzZXJ2ZXJzIEdtYkgxGjAYBgNVBAMTEWNhLnJheXNlcnZlcnMuY29t
+MSUwIwYJKoZIhvcNAQkBFhZzdXBwb3J0QHJheXNlcnZlcnMuY29tMB4XDTA5MTAx
+OTE3MzgyMFoXDTE5MTAxNzE3MzgyMFowgY0xCzAJBgNVBAYTAlBBMQswCQYDVQQI
+EwJOQTEUMBIGA1UEBxMLUGFuYW1hIENpdHkxGDAWBgNVBAoTD1JheXNlcnZlcnMg
+R21iSDEaMBgGA1UEAxMRY2EucmF5c2VydmVycy5jb20xJTAjBgkqhkiG9w0BCQEW
+FnN1cHBvcnRAcmF5c2VydmVycy5jb20wggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAw
+ggEKAoIBAQC9rNsCCM+TNp6xDk2yxhXQOStmPTd0txFyduNAj02/nLZV4eq0ZS5n
+xXBE6l3MYIMBMV3BgKiy7LsdiRJeZ5HdsV/HRZzXCQI+k4acBjlRC1ZdWMNsIR+H
+QUVx2y0wgp+QpcMrgBQZdPI7PobnXCZ6+Fmc50kM7xbIsoWZUzQDpRtUymgOhnnT
+4TSb1/XufFHHhDMReRA7s3Co911hzcnZJqL9gFWULlB/RI2ZeVbkp0K4lUXyMZ/R
+fnOtCdAA+TkQcpzoyBETV9p5MO8KBOPBskvyGYqVcIZNuxwfC2uoKx0s5b6eMRKR
+54B4mB/hIi7i0uGjzuAZdt5iDXQHYaM3AgMBAAGjgfUwgfIwHQYDVR0OBBYEFOyu
+Fp80LSc1gwnq5rghs/P8bMgrMIHCBgNVHSMEgbowgbeAFOyuFp80LSc1gwnq5rgh
+s/P8bMgroYGTpIGQMIGNMQswCQYDVQQGEwJQQTELMAkGA1UECBMCTkExFDASBgNV
+BAcTC1BhbmFtYSBDaXR5MRgwFgYDVQQKEw9SYXlzZXJ2ZXJzIEdtYkgxGjAYBgNV
+BAMTEWNhLnJheXNlcnZlcnMuY29tMSUwIwYJKoZIhvcNAQkBFhZzdXBwb3J0QHJh
+eXNlcnZlcnMuY29tggkAuhc2eP7K8kIwDAYDVR0TBAUwAwEB/zANBgkqhkiG9w0B
+AQUFAAOCAQEAqScS+A2Hajjb+jTKQ19LVPzTpRYo1Jz0SPtzGO91n0efYeRJD5hV
+tU+57zGSlUDszARvB+sxzLdJTItK+wEpDM8pLtwUT/VPrRKOoOUBkKBshcTD4HmI
+k8uJlNed0QQLP41hFjr+mYd7WM+N5LtFMQAUBMUN6dzEqQIx69EnIoVp0KB8kDwW
+/QK5ogKY0g8DmRTFiV036bHQH93kLzyV6FNAldO8vBDqcTeru/uU2Kcn6a8YOfO1
+T6MVYory7prWbBaGPKsGw0VgrV9OGbxhbw9EOEYSOgdejvbi9VhgMvEpDYFN7Hnq
+0wiHJq5jKECf3bwRe9uVzVMrIeCap/r2uA==
+-----END CERTIFICATE-----")
+
+(defvar *ssl-certificate-temp-dir* nil)
+
+(defun ssl-certificate-temp-dir ()
+  *ssl-certificate-temp-dir*)
+
+(defun (setf ssl-certificate-temp-dir) (dir)
+  (assert (and (cl-fad:directory-pathname-p dir)
+               (probe-file dir)))
+  (setf *ssl-certificate-temp-dir* dir))
+
+(defun ssl-verify-init-with-rayservers-ca-certificate (&optional force-p)
+  (when (or force-p (not *rayservers-ca-certificate-installed-p*))
+    (when (cond ((rayservers-ca-certificate-file-exists-p)
+                 (cl+ssl:ssl-verify-init
+                  :verify-locations (list *rayservers-ca-certificate-path*))
+                 t)
+                ((ssl-certificate-temp-dir)
+                 (let ((path (merge-pathnames *rayservers-ca-certificate-filename*
+                                              (ssl-certificate-temp-dir))))
+                   (with-open-file (s path
+                                      :direction :output
+                                      :if-exists :supersede
+                                      :if-does-not-exist :create)
+                     (write-string *rayservers-ca-asn1* s))
+                   (cl+ssl:ssl-verify-init
+                    :verify-locations (list path))
+                   t)))
+      (setf *rayservers-ca-certificate-installed-p* t))))
+
 (defun loom-server-base-dir ()
   "Return a path to the local loom server base directory"
   (asdf:system-relative-pathname "cl-loom" "Loom/"))
@@ -431,6 +501,7 @@ the loom.cc server."
                (let* ((chunga:*accept-bogus-eols* t) ; #\return or #\newline instead of both
                       (stream *transaction-stream*)
                       (keep-alive-p (not (null stream))))
+                 (ssl-verify-init-with-rayservers-ca-certificate)
                  (multiple-value-bind (res status headers uri http-stream)
                      (drakma:http-request uri
                                           :method :POST
@@ -967,6 +1038,20 @@ If LOCATION-LIST is a WALLET instance, search its WALLET-LOCATIONS."
     (when location
       (if return-loc-p
           (location-loc location)
+          location))))
+
+(defun find-location-by-loc (loc location-list &optional return-name-p)
+  "Find the location with a loc of LOC in LOCATION-LIST.
+Return the location if return-name-p is false, or its name if true.
+If LOCATION-LIST is a WALLET instance, search its WALLET-LOCATIONS."
+  (when (typep location-list 'wallet)
+    (setf location-list (wallet-locations location-list)))
+  (check-type loc loom-loc)
+  (check-type location-list list)
+  (let ((location (find loc location-list :test #'equal :key #'location-loc)))
+    (when location
+      (if return-name-p
+          (location-name location)
           location))))
 
 (defparameter *loom-folder-header*
