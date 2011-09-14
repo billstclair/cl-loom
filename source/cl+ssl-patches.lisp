@@ -151,7 +151,7 @@
       (error 'ssl-error-verify :error-code err))))
 
 ;; Redefined from cl+ssl/streams.lisp
-;; Added the 
+;; Added the ssl-stream-check-verify call
 (defun make-ssl-client-stream
     (socket &key certificate key password (method 'ssl-v23-method) external-format
                  close-callback (unwrap-stream-p t))
