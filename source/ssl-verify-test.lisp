@@ -52,7 +52,7 @@
             (format t "Certificate: ~s, err: ~s~%" cert err)
             (unless (cffi:null-pointer-p cert)
               (multiple-value-bind (issuer subject)
-                  (x509-names cert)
+                  (x509-certificate-names cert)
                 (format t "  issuer: ~a~%  subject: ~a~%" issuer subject)))
             (unless (eql err 0)
               (error "SSL verify error: ~s" err)))

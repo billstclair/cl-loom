@@ -990,12 +990,15 @@ Content-type: loom/folder
   (cdr (assoc property (wallet-properties wallet) :test #'equal)))
 
 (defun (setf wallet-get-property) (value wallet property)
-  (check-type value string)
+  (check-type value (or null string))
   (check-type wallet wallet)
   (setf property (downcase-princ-to-string property))
   (let ((cell (assoc property (wallet-properties wallet) :test #'equal)))
     (if cell
-        (setf (cdr cell) value)
+        (if (null value)
+            (setf (wallet-properties wallet)
+                  (delete cell (wallet-properties wallet) :test #'eq))
+            (setf (cdr cell) value))
         (push (cons property value) (wallet-properties wallet)))))
 
 (defun find-asset (name asset-list &optional return-id-p)
@@ -1064,7 +1067,8 @@ If LOCATION-LIST is a WALLET instance, search its WALLET-LOCATIONS."
 ;; Return an alist of all the unhandled wallet properties in alist
 (defun filter-wallet-properties (alist)
   (loop for (key . value) in alist
-       unless (or (member key '("list_loc" "list_type" "list_H") :test #'equal)
+       unless (or (member key '("list_loc" "list_type" "list_H" "recording")
+                          :test #'equal)
                   (eql 0 (search "loc_name." key :test #'equal))
                   (eql 0 (search "loc_disable." key :test #'equal))
                   (eql 0 (search "type_name." key :test #'equal))
@@ -1202,8 +1206,8 @@ Defaults to LOCATION."
   (when private-p
     (return-from get-wallet
       (setf (get-private-wallet location is-passphrase-p usage) wallet)))
-  (unless usage (setf usage location))
   (setf location (passphrase-location location is-passphrase-p))
+  (unless usage (setf usage location))
   (archive-write location (wallet-string wallet) usage)
   (values wallet location))
 
