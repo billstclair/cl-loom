@@ -1224,12 +1224,18 @@ Defaults to LOCATION."
   (check-type location loom-loc)
   (encrypt-string-for-location (wallet-string wallet) location))
 
+(defun base64-to-array (base64-string)
+  (handler-bind
+      ;; Turn bad character warning into error
+      ((warning (lambda (c) (error (princ-to-string c)))))
+    (cl-base64:base64-string-to-usb8-array base64-string)))
+
 (defun decrypt-string-from-location (string location)
   (check-type string string)
   (check-type location loom-loc)
   (let* ((passphrase (location-to-uint-8-array location))
          (iv-and-value (split-sequence:split-sequence #\| string))
-         (iv (cl-base64:base64-string-to-usb8-array (first iv-and-value))))
+         (iv (base64-to-array (first iv-and-value))))
     (cl-crypto:aes-decrypt-to-string
      (second iv-and-value) passphrase :iv iv)))
 
