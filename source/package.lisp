@@ -145,6 +145,7 @@
            #:initialize-new-store
            #:create-wallet
            #:move-wallet
+           #:delete-wallet
            
            #:add-asset
            #:remove-asset

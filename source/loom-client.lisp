@@ -1395,21 +1395,54 @@ If NEW-PRIVATE-P is true, the new wallet will be private."
           (archive-write session-value new-location new-location)))
       real-new-location)))
 
+;; Delete the wallet at LOCATION/LOCATION-IS-PASSPHRASE-P and its session storage.
+;; Credit the usage tokens to USAGE.
+;; Wallet is private if private-p is true.
+(defun delete-wallet (location usage &key
+                      location-is-passphrase-p
+                      usage-is-passphrase-p
+                      private-p
+                      usage-private-p)
+  (check-type location string)
+  (check-type usage string)
+  (with-loom-transaction ()
+    (setf location (passphrase-location location location-is-passphrase-p)
+          usage (passphrase-location usage usage-is-passphrase-p))
+    (let* ((real-location (if private-p
+                              (nth-value 1 (sha256 location))
+                              location))
+           (real-usage (if usage-private-p
+                           (nth-value 1 (sha256 usage))
+                           usage))
+           (session (unless private-p (loom-loc-xor location *one*)))
+           (session-value (and session (ignore-errors (archive-touch session)))))
+      (unless private-p
+        (when session-value
+          (archive-write session-value "" real-usage)
+          (archive-sell session-value real-usage))
+        (archive-write session "" real-usage)
+        (archive-sell session real-usage))
+      (archive-write real-location "" real-usage)
+      (archive-sell real-location real-usage)
+      t)))
+
 ;; Scans all active locations and types in wallet, and returns an alist:
 ;; ((location (id . qty) (id . qty) ...) ...)
 ;; The QTY values are all shifted as specified by the wallet locations'
 ;; scales and precisions.
 ;; To do: Handle greater that 2048 combinations, Loom's max for one call.
+;; If wallet is NIL, then locations should be a list of raw loom-loc strings,
+;; and assets should be a list of raw asset id strings.
 (defun grid-scan-wallet (wallet &key
                          (locations (wallet-locations wallet) locations-p)
                          (assets (wallet-assets wallet) assets-p))
-  (check-type wallet wallet)
+  (check-type wallet (or null wallet))
   (let* ((locs (loop for loc in locations
-                  unless (and (not locations-p) (location-disabled-p loc))
-                  collect (location-loc loc)))
+                  unless (and wallet (not locations-p) (location-disabled-p loc))
+                  collect (if wallet (location-loc loc) loc)))
          (types (loop for asset in assets
-                   unless (and (not assets-p) (asset-disabled-p asset))
-                   collect (asset-id asset)))
+                   unless (and wallet (not assets-p) (asset-disabled-p asset))
+                   collect (if wallet (asset-id asset) asset)))
          (alist (grid-scan locs types)))
     (loop for (key . values) in alist
        when (eql 0 (search "loc/" key :test #'string-equal))
@@ -1417,7 +1450,8 @@ If NEW-PRIVATE-P is true, the new wallet will be private."
          (cons (subseq key 4)
                (loop for val/id in (split-sequence:split-sequence #\space values)
                   for (val id) = (split-sequence:split-sequence #\: val/id)
-                  for asset = (find id assets :test #'equal :key #'asset-id)
+                  for asset = (and wallet
+                                   (find id assets :test #'equal :key #'asset-id))
                   for num = (if asset
                                 (format-loom-qty-from-asset val asset)
                                 val)
