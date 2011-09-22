@@ -26,6 +26,7 @@
      (:file "loom-objects")
      ))))
 
+#-windows
 (unless (or (find-package :cl-autorepo)
             (ignore-errors (ql:quickload "cl-autorepo")))
   (let* ((dir "~/.local/share/common-lisp/source/")
@@ -35,6 +36,7 @@
     (load autorepo-asd)
     (ql:quickload "cl-autorepo")))
 
+#-windows
 (cl-autorepo:add-system
  "cl-crypto" "https://github.com/billstclair/cl-crypto" :git)
 
