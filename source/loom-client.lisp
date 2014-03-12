@@ -94,7 +94,7 @@ T6MVYory7prWbBaGPKsGw0VgrV9OGbxhbw9EOEYSOgdejvbi9VhgMvEpDYFN7Hnq
 (defun ssl-verify-init-with-rayservers-ca-certificate (&optional force-p)
   (when (or force-p (not *rayservers-ca-certificate-installed-p*))
     (when (cond ((rayservers-ca-certificate-file-exists-p)
-                 (cl+ssl:ssl-verify-init
+                 (cl+ssl::ssl-verify-init
                   :verify-locations (list *rayservers-ca-certificate-path*))
                  t)
                 ((ssl-certificate-temp-dir)
@@ -105,7 +105,7 @@ T6MVYory7prWbBaGPKsGw0VgrV9OGbxhbw9EOEYSOgdejvbi9VhgMvEpDYFN7Hnq
                                       :if-exists :supersede
                                       :if-does-not-exist :create)
                      (write-string *rayservers-ca-asn1* s))
-                   (cl+ssl:ssl-verify-init
+                   (cl+ssl::ssl-verify-init
                     :verify-locations (list path))
                    t)))
       (setf *rayservers-ca-certificate-installed-p* t))))
