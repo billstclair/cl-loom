@@ -25,6 +25,7 @@
      (:file "loom-objects")
      ))))
 
+#-windows
 (let* ((dir "~/.local/share/common-lisp/source/"))
   (asdf:run-shell-command "mkdir -p ~a" dir)
   (unless (or (find-package :cl-autorepo)
@@ -35,6 +36,7 @@
     (load autorepo-asd)
     (ql:quickload "cl-autorepo"))))
 
+#-windows
 (flet ((addit (name)
          (cl-autorepo:add-system
           name (format nil "git://github.com/billstclair/~a.git" name) :git)))
